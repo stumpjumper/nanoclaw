@@ -232,8 +232,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Flag this chat for a voice reply if the user sent a voice message or asked for audio
   const wantsVoice = missedMessages.some(
     (m) =>
-      m.content.startsWith('[Voice:') ||
-      VOICE_REQUEST_PATTERN.test(m.content),
+      m.content.startsWith('[Voice:') || VOICE_REQUEST_PATTERN.test(m.content),
   );
   if (wantsVoice && channel.sendVoice) {
     pendingVoiceReply.add(chatJid);
