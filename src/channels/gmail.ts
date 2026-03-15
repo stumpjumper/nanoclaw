@@ -31,6 +31,7 @@ export interface GmailChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  sendDirect: (jid: string, text: string) => Promise<void>;
 }
 
 interface TriagedEmail {
@@ -206,8 +207,7 @@ export class GmailChannel implements Channel {
 
     if (this.gmailGroupName) {
       const entry = Object.entries(groups).find(
-        ([, g]) =>
-          g.folder.toLowerCase() === this.gmailGroupName.toLowerCase(),
+        ([, g]) => g.folder.toLowerCase() === this.gmailGroupName.toLowerCase(),
       );
       if (entry) return entry[0];
       logger.warn(
@@ -288,7 +288,7 @@ export class GmailChannel implements Channel {
     // Apply Gmail labels
     await this.applyLabels(emails);
 
-    // Send numbered summary to the target group
+    // Send numbered summary directly to the user (bypasses agent so formatting is preserved)
     const summary = this.formatSummary(emails);
     const now = new Date().toLocaleString('en-US', {
       timeZone: TIMEZONE,
@@ -296,13 +296,20 @@ export class GmailChannel implements Channel {
       minute: '2-digit',
       hour12: true,
     });
+    const fullSummary = `📬 Gmail check (${now}) — ${emails.length} new\n\n${summary}`;
+    await this.opts.sendDirect(targetJid, fullSummary);
 
+    // Inject a context message so the agent knows what was sent and can handle replies
+    const contextLines = emails.map(
+      (e, i) =>
+        `${i + 1}. [${e.bucket.toUpperCase()}] From: ${e.fromName} <${e.from}> | Subject: ${e.subject} | threadId: ${e.threadId}`,
+    );
     this.opts.onMessage(targetJid, {
-      id: `gmail-summary-${Date.now()}`,
+      id: `gmail-context-${Date.now()}`,
       chat_jid: targetJid,
       sender: 'gmail-system',
       sender_name: 'Gmail',
-      content: `📬 Gmail check (${now}) — ${emails.length} new\n\n${summary}`,
+      content: `[Gmail triage context — do not repeat this to the user]\n${contextLines.join('\n')}\n\nWhen the user replies with feedback (e.g. "3 is trash", "reply to 1 with yes"), act on it. Use the threadId to send email replies if asked.`,
       timestamp: new Date().toISOString(),
       is_from_me: false,
     });
@@ -343,9 +350,7 @@ export class GmailChannel implements Channel {
     });
 
     const stubs = res.data.messages || [];
-    const newStubs = stubs.filter(
-      (s) => s.id && !this.processedIds.has(s.id!),
-    );
+    const newStubs = stubs.filter((s) => s.id && !this.processedIds.has(s.id!));
 
     if (newStubs.length === 0) return [];
 
@@ -393,7 +398,9 @@ export class GmailChannel implements Channel {
     ).toISOString();
 
     const senderMatch = from.match(/^(.+?)\s*<(.+?)>$/);
-    const senderName = senderMatch ? senderMatch[1].replace(/"/g, '').trim() : from;
+    const senderName = senderMatch
+      ? senderMatch[1].replace(/"/g, '').trim()
+      : from;
     const senderEmail = senderMatch ? senderMatch[2] : from;
 
     // Skip emails from self
@@ -649,13 +656,20 @@ ${emailList}`;
   private loadWatermark(): void {
     try {
       const data = JSON.parse(fs.readFileSync(this.watermarkPath, 'utf-8'));
-      this.afterEpochSecs = data.afterEpochSecs ?? Math.floor(Date.now() / 1000);
-      logger.info({ afterEpochSecs: this.afterEpochSecs }, 'Gmail watermark loaded');
+      this.afterEpochSecs =
+        data.afterEpochSecs ?? Math.floor(Date.now() / 1000);
+      logger.info(
+        { afterEpochSecs: this.afterEpochSecs },
+        'Gmail watermark loaded',
+      );
     } catch {
       // First run — start from now, ignore backlog
       this.afterEpochSecs = Math.floor(Date.now() / 1000);
       this.saveWatermark();
-      logger.info({ afterEpochSecs: this.afterEpochSecs }, 'Gmail watermark initialized (first run)');
+      logger.info(
+        { afterEpochSecs: this.afterEpochSecs },
+        'Gmail watermark initialized (first run)',
+      );
     }
   }
 

@@ -13,6 +13,7 @@ function makeOpts(overrides?: Partial<GmailChannelOpts>): GmailChannelOpts {
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
     registeredGroups: () => ({}),
+    sendDirect: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

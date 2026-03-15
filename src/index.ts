@@ -670,6 +670,10 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    sendDirect: async (jid: string, text: string) => {
+      const channel = channels.find((c) => c.ownsJid(jid));
+      if (channel) await channel.sendMessage(jid, text);
+    },
   };
 
   // Create and connect all registered channels.
