@@ -504,7 +504,7 @@ ${emailList}`;
    */
   private async callClaude(prompt: string): Promise<string> {
     const env = readEnvFile([
-      'ANTHROPIC_API_KEY',
+      'GMAIL_ANTHROPIC_API_KEY',
       'CLAUDE_CODE_OAUTH_TOKEN',
       'ANTHROPIC_AUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
@@ -516,8 +516,8 @@ ${emailList}`;
       'anthropic-version': '2023-06-01',
     };
 
-    if (env.ANTHROPIC_API_KEY) {
-      headers['x-api-key'] = env.ANTHROPIC_API_KEY;
+    if (env.GMAIL_ANTHROPIC_API_KEY) {
+      headers['x-api-key'] = env.GMAIL_ANTHROPIC_API_KEY;
     } else {
       const token = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
       if (!token) throw new Error('No Claude auth credentials found in .env');
