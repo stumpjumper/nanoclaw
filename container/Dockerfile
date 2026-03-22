@@ -49,8 +49,9 @@ RUN npm install
 # Copy source code
 COPY agent-runner/ ./
 
-# Build TypeScript
-RUN npm run build
+# Build TypeScript and store source hash so the entrypoint can skip recompilation
+RUN npm run build && \
+    find /app/src -name '*.ts' | sort | xargs md5sum | md5sum | cut -d' ' -f1 > /app/dist/.src-hash
 
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
@@ -62,7 +63,7 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 # /app/dist-cache is a host-mounted volume (data/sessions/{group}/agent-runner-dist/)
 # so compiled output persists across container restarts. Source hash guards against
 # stale cache when the per-group agent-runner source has been customized.
-RUN printf '#!/bin/bash\nset -e\nDIST_CACHE="/app/dist-cache"\nHASH_FILE="$DIST_CACHE/src-hash"\nSRC_HASH=$(find /app/src -name '"'"'*.ts'"'"' | sort | xargs md5sum 2>/dev/null | md5sum | cut -d'"'"' '"'"' -f1)\nif [ -f "$HASH_FILE" ] && [ -f "$DIST_CACHE/index.js" ] && [ "$(cat "$HASH_FILE")" = "$SRC_HASH" ]; then\n  echo "Agent-runner: using cached build" >&2\nelse\n  echo "Agent-runner: compiling..." >&2\n  cd /app && npx tsc --outDir "$DIST_CACHE" 2>&1 >&2\n  echo "$SRC_HASH" > "$HASH_FILE"\nfi\nln -sf /app/node_modules "$DIST_CACHE/node_modules" 2>/dev/null || true\ncat > /tmp/input.json\nnode "$DIST_CACHE/index.js" < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+RUN printf '#!/bin/bash\nset -e\nDIST_CACHE="/app/dist-cache"\nHASH_FILE="$DIST_CACHE/src-hash"\nSRC_HASH=$(find /app/src -name '"'"'*.ts'"'"' | sort | xargs md5sum 2>/dev/null | md5sum | cut -d'"'"' '"'"' -f1)\nif [ -f "$HASH_FILE" ] && [ -f "$DIST_CACHE/index.js" ] && [ "$(cat "$HASH_FILE")" = "$SRC_HASH" ]; then\n  echo "Agent-runner: using cached build" >&2\nelif [ -f "/app/dist/index.js" ] && [ -f "/app/dist/.src-hash" ] && [ "$(cat /app/dist/.src-hash)" = "$SRC_HASH" ]; then\n  echo "Agent-runner: using image build" >&2\n  DIST_CACHE="/app/dist"\nelse\n  echo "Agent-runner: compiling..." >&2\n  cd /app && npx tsc --outDir "$DIST_CACHE" 2>&1 >&2\n  echo "$SRC_HASH" > "$HASH_FILE"\nfi\nln -sf /app/node_modules "$DIST_CACHE/node_modules" 2>/dev/null || true\ncat > /tmp/input.json\nnode "$DIST_CACHE/index.js" < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
 # /app/dist-cache is writable so it works both with and without the host mount
