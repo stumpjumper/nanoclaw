@@ -212,6 +212,22 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Persist compiled agent-runner output across container restarts.
+  // The entrypoint checks a source hash and skips recompilation when unchanged,
+  // saving several seconds on every cold start.
+  const groupAgentRunnerDistDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    'agent-runner-dist',
+  );
+  fs.mkdirSync(groupAgentRunnerDistDir, { recursive: true });
+  mounts.push({
+    hostPath: groupAgentRunnerDistDir,
+    containerPath: '/app/dist-cache',
+    readonly: false,
+  });
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(

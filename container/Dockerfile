@@ -30,6 +30,10 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Install Python and youtube-transcript-api for transcript fetching
+RUN apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/* \
+    && pip3 install youtube-transcript-api --break-system-packages
+
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
@@ -55,7 +59,10 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 # Container input (prompt, group info) is passed via stdin JSON.
 # Credentials are injected by the host's credential proxy — never passed here.
 # Follow-up messages arrive via IPC files in /workspace/ipc/input/
-RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\nln -s /app/node_modules /tmp/dist/node_modules\nchmod -R a-w /tmp/dist\ncat > /tmp/input.json\nnode /tmp/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+# /app/dist-cache is a host-mounted volume (data/sessions/{group}/agent-runner-dist/)
+# so compiled output persists across container restarts. Source hash guards against
+# stale cache when the per-group agent-runner source has been customized.
+RUN printf '#!/bin/bash\nset -e\nDIST_CACHE="/app/dist-cache"\nHASH_FILE="$DIST_CACHE/src-hash"\nSRC_HASH=$(find /app/src -name '"'"'*.ts'"'"' | sort | xargs md5sum 2>/dev/null | md5sum | cut -d'"'"' '"'"' -f1)\nif [ -f "$HASH_FILE" ] && [ -f "$DIST_CACHE/index.js" ] && [ "$(cat "$HASH_FILE")" = "$SRC_HASH" ]; then\n  echo "Agent-runner: using cached build" >&2\nelse\n  echo "Agent-runner: compiling..." >&2\n  cd /app && npx tsc --outDir "$DIST_CACHE" 2>&1 >&2\n  echo "$SRC_HASH" > "$HASH_FILE"\nfi\nln -sf /app/node_modules "$DIST_CACHE/node_modules" 2>/dev/null || true\ncat > /tmp/input.json\nnode "$DIST_CACHE/index.js" < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node
