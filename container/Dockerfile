@@ -65,7 +65,9 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 RUN printf '#!/bin/bash\nset -e\nDIST_CACHE="/app/dist-cache"\nHASH_FILE="$DIST_CACHE/src-hash"\nSRC_HASH=$(find /app/src -name '"'"'*.ts'"'"' | sort | xargs md5sum 2>/dev/null | md5sum | cut -d'"'"' '"'"' -f1)\nif [ -f "$HASH_FILE" ] && [ -f "$DIST_CACHE/index.js" ] && [ "$(cat "$HASH_FILE")" = "$SRC_HASH" ]; then\n  echo "Agent-runner: using cached build" >&2\nelse\n  echo "Agent-runner: compiling..." >&2\n  cd /app && npx tsc --outDir "$DIST_CACHE" 2>&1 >&2\n  echo "$SRC_HASH" > "$HASH_FILE"\nfi\nln -sf /app/node_modules "$DIST_CACHE/node_modules" 2>/dev/null || true\ncat > /tmp/input.json\nnode "$DIST_CACHE/index.js" < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
-RUN chown -R node:node /workspace && chmod 777 /home/node
+# /app/dist-cache is writable so it works both with and without the host mount
+RUN chown -R node:node /workspace && chmod 777 /home/node && \
+    mkdir -p /app/dist-cache && chown node:node /app/dist-cache
 
 # Switch to non-root user (required for --dangerously-skip-permissions)
 USER node
