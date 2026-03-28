@@ -32,7 +32,7 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install Python and youtube-transcript-api for transcript fetching
 RUN apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/* \
-    && pip3 install youtube-transcript-api --break-system-packages
+    && pip3 install youtube-transcript-api requests --break-system-packages
 
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
