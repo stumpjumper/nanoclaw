@@ -89,7 +89,6 @@ const pendingVoiceReply = new Set<string>();
 const VOICE_REQUEST_PATTERN =
   /\b(audio summary|voice (summary|reply|response|note)|read (this|it) (to me|aloud|out loud)|speak (this|that)|tell me (this|that) as audio)\b/i;
 
-
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
   const agentTs = getRouterState('last_agent_timestamp');
@@ -170,7 +169,6 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
       logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
     }
   }
-
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
