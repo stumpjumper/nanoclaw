@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Wrapper: prompts to add Telegram channel if --channels not specified.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REAL_CLAUDE=$(PATH="${PATH//$SCRIPT_DIR:/}" command -v claude 2>/dev/null)
+
+if [[ -z "$REAL_CLAUDE" ]]; then
+    echo "Error: claude not found in PATH" >&2
+    exit 1
+fi
+
+# Check if --channels is already in the args
+has_channels=false
+for arg in "$@"; do
+    if [[ "$arg" == --channels* ]]; then
+        has_channels=true
+        break
+    fi
+done
+
+if $has_channels; then
+    exec "$REAL_CLAUDE" "$@"
+fi
+
+# No --channels — ask
+read -r -p "No --channels flag. Add Telegram plugin? [Y/n] " reply
+reply="${reply:-Y}"
+if [[ "$reply" =~ ^[Yy] ]]; then
+    exec "$REAL_CLAUDE" --channels plugin:telegram@claude-plugins-official "$@"
+else
+    exec "$REAL_CLAUDE" "$@"
+fi
