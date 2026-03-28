@@ -106,6 +106,8 @@ Or run `/customize` for guided changes.
 
 The codebase is small enough that Claude can safely modify it.
 
+For step-by-step guidance on creating groups and scheduling tasks, see [docs/GROUPS-AND-TASKS.md](docs/GROUPS-AND-TASKS.md).
+
 ## Contributing
 
 **Don't add features. Add skills.**
