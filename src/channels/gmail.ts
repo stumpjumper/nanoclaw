@@ -560,19 +560,13 @@ ${emailList}`;
       const labelId = this.labelIds[labelName];
       if (!labelId) continue;
 
-      const addLabelIds = [labelId];
-      const removeLabelIds: string[] = ['UNREAD'];
-
-      // Trash-classified emails: archive out of inbox (not deleted yet — user reviews first)
-      if (email.bucket === 'trash') {
-        removeLabelIds.push('INBOX');
-      }
-
+      // Only add the NanoClaw label — leave UNREAD and INBOX untouched
+      // so Alfred can find and manage emails himself in the Gmail app.
       try {
         await this.gmail!.users.messages.modify({
           userId: 'me',
           id: email.id,
-          requestBody: { addLabelIds, removeLabelIds },
+          requestBody: { addLabelIds: [labelId] },
         });
       } catch (err) {
         logger.warn({ messageId: email.id, err }, 'Failed to label email');
