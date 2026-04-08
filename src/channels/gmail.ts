@@ -499,23 +499,28 @@ ${emailList}`;
   }
 
   /**
-   * Call the Anthropic API directly, using whichever auth is configured.
-   * In API-key mode sends x-api-key; in OAuth mode sends Authorization: Bearer.
+   * Call OpenRouter for email triage (cheap, no Anthropic API billing).
+   * Falls back to Anthropic direct if OPENROUTER_API_KEY is not set.
    */
   private async callClaude(prompt: string): Promise<string> {
     const env = readEnvFile([
+      'OPENROUTER_API_KEY',
       'GMAIL_ANTHROPIC_API_KEY',
       'CLAUDE_CODE_OAUTH_TOKEN',
       'ANTHROPIC_AUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
     ]);
 
+    if (env.OPENROUTER_API_KEY) {
+      return this.callOpenRouter(prompt, env.OPENROUTER_API_KEY);
+    }
+
+    // Fallback: Anthropic direct
     const baseUrl = env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'anthropic-version': '2023-06-01',
     };
-
     if (env.GMAIL_ANTHROPIC_API_KEY) {
       headers['x-api-key'] = env.GMAIL_ANTHROPIC_API_KEY;
     } else {
@@ -523,7 +528,6 @@ ${emailList}`;
       if (!token) throw new Error('No Claude auth credentials found in .env');
       headers['Authorization'] = `Bearer ${token}`;
     }
-
     const response = await fetch(`${baseUrl}/v1/messages`, {
       method: 'POST',
       headers,
@@ -533,16 +537,39 @@ ${emailList}`;
         messages: [{ role: 'user', content: prompt }],
       }),
     });
-
     if (!response.ok) {
       const body = await response.text();
       throw new Error(`Anthropic API ${response.status}: ${body}`);
     }
-
     const data = (await response.json()) as {
       content: { type: string; text: string }[];
     };
     return data.content[0]?.text ?? '';
+  }
+
+  private async callOpenRouter(prompt: string, apiKey: string): Promise<string> {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://github.com/qwibitai/nanoclaw',
+        'X-Title': 'NanoClaw Gmail Triage',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.0-flash-001',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`OpenRouter API ${response.status}: ${body}`);
+    }
+    const data = (await response.json()) as {
+      choices: { message: { content: string } }[];
+    };
+    return data.choices[0]?.message?.content ?? '';
   }
 
   /** Apply NanoClaw/* labels to each email in Gmail. */
