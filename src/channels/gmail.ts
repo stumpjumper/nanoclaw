@@ -17,7 +17,7 @@ import {
 } from '../types.js';
 
 // Hours of day (local time) when Gmail is polled
-const POLL_HOURS = [4, 10, 16, 21];
+const POLL_HOURS = [4, 16];
 
 // Gmail label names applied by NanoClaw
 const LABEL_NOTIFY = 'NanoClaw/Notify';
