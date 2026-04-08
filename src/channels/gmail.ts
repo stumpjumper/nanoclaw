@@ -273,8 +273,9 @@ export class GmailChannel implements Channel {
     }
 
     let emails: TriagedEmail[];
+    let triageError: string | null;
     try {
-      emails = await this.fetchAndTriageEmails();
+      ({ emails, triageError } = await this.fetchAndTriageEmails());
     } catch (err) {
       logger.error({ err }, 'Gmail poll failed');
       return;
@@ -296,7 +297,10 @@ export class GmailChannel implements Channel {
       minute: '2-digit',
       hour12: true,
     });
-    const fullSummary = `📬 Gmail check (${now}) — ${emails.length} new\n\n${summary}`;
+    const triageWarning = triageError
+      ? `\n\n⚠️ Triage failed — all defaulted to Review. Error: ${triageError}`
+      : '';
+    const fullSummary = `📬 Gmail check (${now}) — ${emails.length} new\n\n${summary}${triageWarning}`;
     await this.opts.sendDirect(targetJid, fullSummary);
 
     // Inject a context message so the agent knows what was sent and can handle replies
@@ -340,8 +344,11 @@ export class GmailChannel implements Channel {
     );
   }
 
-  private async fetchAndTriageEmails(): Promise<TriagedEmail[]> {
-    if (!this.gmail) return [];
+  private async fetchAndTriageEmails(): Promise<{
+    emails: TriagedEmail[];
+    triageError: string | null;
+  }> {
+    if (!this.gmail) return { emails: [], triageError: null };
 
     const res = await this.gmail.users.messages.list({
       userId: 'me',
@@ -352,7 +359,7 @@ export class GmailChannel implements Channel {
     const stubs = res.data.messages || [];
     const newStubs = stubs.filter((s) => s.id && !this.processedIds.has(s.id!));
 
-    if (newStubs.length === 0) return [];
+    if (newStubs.length === 0) return { emails: [], triageError: null };
 
     // Fetch full message data
     const fetched = await Promise.all(
@@ -369,9 +376,8 @@ export class GmailChannel implements Channel {
       this.processedIds = new Set(ids.slice(ids.length - 2500));
     }
 
-    // Triage via Claude
-    const triaged = await this.triageEmails(valid);
-    return triaged;
+    // Triage via Claude/OpenRouter
+    return this.triageEmails(valid);
   }
 
   private async fetchEmail(messageId: string): Promise<TriagedEmail | null> {
@@ -432,8 +438,10 @@ export class GmailChannel implements Channel {
   }
 
   /** Use Claude to classify emails into notify / review / trash. */
-  private async triageEmails(emails: TriagedEmail[]): Promise<TriagedEmail[]> {
-    if (emails.length === 0) return emails;
+  private async triageEmails(
+    emails: TriagedEmail[],
+  ): Promise<{ emails: TriagedEmail[]; triageError: string | null }> {
+    if (emails.length === 0) return { emails, triageError: null };
 
     const emailList = emails
       .map(
@@ -490,12 +498,13 @@ ${emailList}`;
           emails[i].reason = results[i].reason || '';
         }
       }
+      return { emails, triageError: null };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       logger.error({ err }, 'Gmail triage failed, defaulting all to review');
       for (const e of emails) e.bucket = 'review';
+      return { emails, triageError: msg };
     }
-
-    return emails;
   }
 
   /**
@@ -547,21 +556,27 @@ ${emailList}`;
     return data.content[0]?.text ?? '';
   }
 
-  private async callOpenRouter(prompt: string, apiKey: string): Promise<string> {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'https://github.com/qwibitai/nanoclaw',
-        'X-Title': 'NanoClaw Gmail Triage',
+  private async callOpenRouter(
+    prompt: string,
+    apiKey: string,
+  ): Promise<string> {
+    const response = await fetch(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://github.com/qwibitai/nanoclaw',
+          'X-Title': 'NanoClaw Gmail Triage',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-2.0-flash-001',
+          max_tokens: 1024,
+          messages: [{ role: 'user', content: prompt }],
+        }),
       },
-      body: JSON.stringify({
-        model: 'google/gemini-2.0-flash-001',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
+    );
     if (!response.ok) {
       const body = await response.text();
       throw new Error(`OpenRouter API ${response.status}: ${body}`);
