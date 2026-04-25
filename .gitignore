@@ -39,3 +39,7 @@ groups/*
 .nanoclaw/
 
 agents-sdk-docs
+
+# Runtime artifacts
+nanoclaw.db
+claude_restart_command
