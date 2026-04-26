@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 Search YouTube for recent videos using the YouTube Data API v3.
-Three-step: /search → /videos (duration + stats) → /channels (subscribers).
+
+Two modes:
+  --query QUERY     Keyword search via /search (3 API calls)
+  --playlist-id ID  Playlist fetch via /playlistItems (3 API calls)
+
+Both modes: /videos (duration + stats + description) → /channels (subscribers).
 Applies quality filters before returning results.
 
 Reads YOUTUBE_API_KEY from environment. Bypasses the OneCLI HTTPS proxy so
 Google's googleapis.com OAuth handling doesn't interfere with API key injection.
-
-Usage: python3 youtube-search.py --query QUERY [options]
-Outputs a JSON array of passing videos to stdout.
 """
 
 import sys
@@ -46,9 +48,11 @@ def main():
         sys.exit(1)
 
     p = argparse.ArgumentParser()
-    p.add_argument('--query', required=True)
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--query', help='Keyword search query')
+    mode.add_argument('--playlist-id', help='YouTube playlist ID (fetches items instead of searching)')
     p.add_argument('--max-results', type=int, default=10,
-                   help='Results to fetch from search (before filtering)')
+                   help='Results to fetch before filtering (max 50 for playlist mode)')
     p.add_argument('--hours-back', type=int, default=48)
     p.add_argument('--min-duration', type=int, default=0,
                    help='Minimum video duration in seconds')
@@ -59,46 +63,87 @@ def main():
                    help='Minimum channel subscriber count; channels with hidden counts are excluded')
     p.add_argument('--video-duration', default='any',
                    choices=['any', 'short', 'medium', 'long'],
-                   help='API-level duration filter: short (<4m), medium (4-20m), long (>20m)')
+                   help='API-level duration filter (search mode only): short (<4m), medium (4-20m), long (>20m)')
     args = p.parse_args()
 
-    published_after = (
-        datetime.now(timezone.utc) - timedelta(hours=args.hours_back)
-    ).strftime('%Y-%m-%dT%H:%M:%SZ')
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours_back)
 
-    # Step 1 — Search
-    try:
-        search_params = {
-            'key': api_key,
-            'q': args.query,
-            'type': 'video',
-            'order': 'date',
-            'publishedAfter': published_after,
-            'maxResults': args.max_results,
-            'part': 'snippet',
-        }
-        if args.video_duration != 'any':
-            search_params['videoDuration'] = args.video_duration
-        search = api_get('https://youtube.googleapis.com/youtube/v3/search', search_params)
-    except Exception as e:
-        print(f"Search API error: {e}", file=sys.stderr)
-        sys.exit(1)
+    # ── Step 1: Collect video IDs and basic metadata ──────────────────────────
 
-    items = search.get('items', [])
-    if not items:
+    video_ids = []
+    snippets = {}   # video_id → {title, channelId, channelTitle, publishedAt}
+
+    if args.query:
+        # Search mode
+        try:
+            search_params = {
+                'key': api_key,
+                'q': args.query,
+                'type': 'video',
+                'order': 'date',
+                'publishedAfter': cutoff.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'maxResults': args.max_results,
+                'part': 'snippet',
+            }
+            if args.video_duration != 'any':
+                search_params['videoDuration'] = args.video_duration
+            search = api_get('https://youtube.googleapis.com/youtube/v3/search', search_params)
+        except Exception as e:
+            print(f"Search API error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        for item in search.get('items', []):
+            vid_id = item['id']['videoId']
+            video_ids.append(vid_id)
+            snippets[vid_id] = item['snippet']
+
+    else:
+        # Playlist mode
+        try:
+            playlist = api_get('https://www.googleapis.com/youtube/v3/playlistItems', {
+                'key': api_key,
+                'playlistId': args.playlist_id,
+                'part': 'snippet,contentDetails',
+                'maxResults': min(args.max_results, 50),
+            })
+        except Exception as e:
+            print(f"PlaylistItems API error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        for item in playlist.get('items', []):
+            vid_id = item['snippet']['resourceId']['videoId']
+            # videoPublishedAt is the actual upload date; publishedAt is when added to playlist
+            published_str = (item['contentDetails'].get('videoPublishedAt')
+                             or item['snippet'].get('publishedAt', ''))
+            try:
+                published_dt = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
+            except Exception:
+                published_dt = datetime.now(timezone.utc)
+
+            if published_dt < cutoff:
+                continue  # playlist is newest-first, but check all in case of re-ordering
+
+            video_ids.append(vid_id)
+            snippets[vid_id] = {
+                'title': item['snippet'].get('title', ''),
+                'channelId': item['snippet'].get('videoOwnerChannelId', ''),
+                'channelTitle': item['snippet'].get('videoOwnerChannelTitle', ''),
+                'publishedAt': published_str,
+            }
+
+    if not video_ids:
         print('[]')
         return
 
-    video_ids = [i['id']['videoId'] for i in items]
-    channel_ids = list({i['snippet']['channelId'] for i in items})
-    snippets = {i['id']['videoId']: i['snippet'] for i in items}
+    channel_ids = list({s['channelId'] for s in snippets.values() if s.get('channelId')})
 
-    # Step 2 — Video details: duration + view/like counts (one call, 1 quota unit)
+    # ── Step 2: Video details — duration + stats + description (1 quota unit) ─
+
     try:
         vids = api_get('https://youtube.googleapis.com/youtube/v3/videos', {
             'key': api_key,
             'id': ','.join(video_ids),
-            'part': 'contentDetails,statistics',
+            'part': 'contentDetails,statistics,snippet',
         })
     except Exception as e:
         print(f"Videos API error: {e}", file=sys.stderr)
@@ -107,13 +152,16 @@ def main():
     vid_map = {}
     for v in vids.get('items', []):
         stats = v.get('statistics', {})
+        desc = v.get('snippet', {}).get('description', '')
         vid_map[v['id']] = {
             'duration_seconds': parse_iso_duration(v['contentDetails'].get('duration')),
             'view_count': int(stats.get('viewCount', 0) or 0),
             'like_count': int(stats.get('likeCount', 0) or 0),
+            'description': desc[:600],
         }
 
-    # Step 3 — Channel subscriber counts (one batch call, 1 quota unit)
+    # ── Step 3: Channel subscriber counts (1 quota unit) ─────────────────────
+
     chan_map = {}
     try:
         chans = api_get('https://youtube.googleapis.com/youtube/v3/channels', {
@@ -130,6 +178,8 @@ def main():
     except Exception as e:
         print(f"Channels API error (non-fatal): {e}", file=sys.stderr)
 
+    # ── Filter and build results ──────────────────────────────────────────────
+
     results = []
     for video_id in video_ids:
         snippet = snippets.get(video_id, {})
@@ -143,17 +193,13 @@ def main():
         subs = cd.get('subscriber_count', 0)
         hidden_subs = cd.get('hidden', False)
 
-        # Duration filter
         if args.min_duration > 0 and duration < args.min_duration:
             continue
-        # View count filter
         if args.min_views > 0 and views < args.min_views:
             continue
-        # Like ratio filter (only applied when there are enough views to be meaningful)
         if args.min_like_ratio > 0 and views >= 100:
             if likes / views < args.min_like_ratio:
                 continue
-        # Subscriber filter — hidden counts treated as failing
         if args.min_subscribers > 0:
             if hidden_subs or subs < args.min_subscribers:
                 continue
@@ -169,6 +215,7 @@ def main():
             'view_count': views,
             'like_count': likes,
             'subscriber_count': subs,
+            'description': vd.get('description', ''),
         })
 
     print(json.dumps(results, indent=2))
