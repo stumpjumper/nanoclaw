@@ -46,6 +46,9 @@ def main():
                    help='Minimum likes/views ratio (e.g. 0.02 = 2%%)')
     p.add_argument('--min-subscribers', type=int, default=0,
                    help='Minimum channel subscriber count; channels with hidden counts are excluded')
+    p.add_argument('--video-duration', default='any',
+                   choices=['any', 'short', 'medium', 'long'],
+                   help='API-level duration filter: short (<4m), medium (4-20m), long (>20m)')
     args = p.parse_args()
 
     api_key = os.environ.get('YOUTUBE_API_KEY')
@@ -59,7 +62,7 @@ def main():
 
     # Step 1 — Search
     try:
-        search = api_get('https://www.googleapis.com/youtube/v3/search', {
+        search_params = {
             'key': api_key,
             'q': args.query,
             'type': 'video',
@@ -67,7 +70,10 @@ def main():
             'publishedAfter': published_after,
             'maxResults': args.max_results,
             'part': 'snippet',
-        })
+        }
+        if args.video_duration != 'any':
+            search_params['videoDuration'] = args.video_duration
+        search = api_get('https://www.googleapis.com/youtube/v3/search', search_params)
     except Exception as e:
         print(f"Search API error: {e}", file=sys.stderr)
         sys.exit(1)
