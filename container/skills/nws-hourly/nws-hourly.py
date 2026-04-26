@@ -11,7 +11,7 @@ Usage:
 
 import sys
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # NWS requires a descriptive User-Agent
@@ -105,7 +105,7 @@ def main():
     tz = ZoneInfo(grid["timezone"])
     now = datetime.now(tz)
     current_hour_start = now.replace(minute=0, second=0, microsecond=0)
-    midnight = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Prefer NWS city/state if available (matches the actual forecast zone)
     display_name = (
