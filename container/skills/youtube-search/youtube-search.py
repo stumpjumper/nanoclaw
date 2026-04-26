@@ -4,20 +4,25 @@ Search YouTube for recent videos using the YouTube Data API v3.
 Three-step: /search → /videos (duration + stats) → /channels (subscribers).
 Applies quality filters before returning results.
 
-API key is injected automatically via the OneCLI proxy as X-goog-api-key.
-No environment variables required.
+Reads YOUTUBE_API_KEY from environment. Bypasses the OneCLI HTTPS proxy so
+Google's googleapis.com OAuth handling doesn't interfere with API key injection.
 
 Usage: python3 youtube-search.py --query QUERY [options]
 Outputs a JSON array of passing videos to stdout.
 """
 
 import sys
+import os
 import json
 import re
 import argparse
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
+
+# Bypass the OneCLI HTTPS proxy — it treats all *.googleapis.com as OAuth
+# domains. YouTube Data API only needs an API key, not OAuth.
+_direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def parse_iso_duration(s):
@@ -30,11 +35,16 @@ def parse_iso_duration(s):
 def api_get(url, params):
     full = url + '?' + urllib.parse.urlencode(params)
     req = urllib.request.Request(full, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with _direct_opener.open(req, timeout=15) as r:
         return json.loads(r.read())
 
 
 def main():
+    api_key = os.environ.get('YOUTUBE_API_KEY')
+    if not api_key:
+        print("YOUTUBE_API_KEY not set", file=sys.stderr)
+        sys.exit(1)
+
     p = argparse.ArgumentParser()
     p.add_argument('--query', required=True)
     p.add_argument('--max-results', type=int, default=10,
@@ -59,6 +69,7 @@ def main():
     # Step 1 — Search
     try:
         search_params = {
+            'key': api_key,
             'q': args.query,
             'type': 'video',
             'order': 'date',
@@ -68,7 +79,7 @@ def main():
         }
         if args.video_duration != 'any':
             search_params['videoDuration'] = args.video_duration
-        search = api_get('https://www.googleapis.com/youtube/v3/search', search_params)
+        search = api_get('https://youtube.googleapis.com/youtube/v3/search', search_params)
     except Exception as e:
         print(f"Search API error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -84,7 +95,8 @@ def main():
 
     # Step 2 — Video details: duration + view/like counts (one call, 1 quota unit)
     try:
-        vids = api_get('https://www.googleapis.com/youtube/v3/videos', {
+        vids = api_get('https://youtube.googleapis.com/youtube/v3/videos', {
+            'key': api_key,
             'id': ','.join(video_ids),
             'part': 'contentDetails,statistics',
         })
@@ -104,7 +116,8 @@ def main():
     # Step 3 — Channel subscriber counts (one batch call, 1 quota unit)
     chan_map = {}
     try:
-        chans = api_get('https://www.googleapis.com/youtube/v3/channels', {
+        chans = api_get('https://youtube.googleapis.com/youtube/v3/channels', {
+            'key': api_key,
             'id': ','.join(channel_ids),
             'part': 'statistics',
         })

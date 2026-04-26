@@ -47,6 +47,8 @@ export interface ContainerConfig {
   agentGroupId?: string;
   /** Max messages per prompt. Falls back to code default if unset. */
   maxMessagesPerPrompt?: number;
+  /** Extra environment variables to pass to the container. */
+  env?: Record<string, string>;
 }
 
 function emptyConfig(): ContainerConfig {
