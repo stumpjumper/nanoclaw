@@ -4,13 +4,14 @@ Search YouTube for recent videos using the YouTube Data API v3.
 Three-step: /search → /videos (duration + stats) → /channels (subscribers).
 Applies quality filters before returning results.
 
+API key is injected automatically via the OneCLI proxy as X-goog-api-key.
+No environment variables required.
+
 Usage: python3 youtube-search.py --query QUERY [options]
-Reads YOUTUBE_API_KEY from environment.
 Outputs a JSON array of passing videos to stdout.
 """
 
 import sys
-import os
 import json
 import re
 import argparse
@@ -51,11 +52,6 @@ def main():
                    help='API-level duration filter: short (<4m), medium (4-20m), long (>20m)')
     args = p.parse_args()
 
-    api_key = os.environ.get('YOUTUBE_API_KEY')
-    if not api_key:
-        print("YOUTUBE_API_KEY not set", file=sys.stderr)
-        sys.exit(1)
-
     published_after = (
         datetime.now(timezone.utc) - timedelta(hours=args.hours_back)
     ).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -63,7 +59,6 @@ def main():
     # Step 1 — Search
     try:
         search_params = {
-            'key': api_key,
             'q': args.query,
             'type': 'video',
             'order': 'date',
@@ -90,7 +85,6 @@ def main():
     # Step 2 — Video details: duration + view/like counts (one call, 1 quota unit)
     try:
         vids = api_get('https://www.googleapis.com/youtube/v3/videos', {
-            'key': api_key,
             'id': ','.join(video_ids),
             'part': 'contentDetails,statistics',
         })
@@ -111,7 +105,6 @@ def main():
     chan_map = {}
     try:
         chans = api_get('https://www.googleapis.com/youtube/v3/channels', {
-            'key': api_key,
             'id': ','.join(channel_ids),
             'part': 'statistics',
         })
