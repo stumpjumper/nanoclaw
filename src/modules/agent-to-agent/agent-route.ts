@@ -21,39 +21,23 @@
 import fs from 'fs';
 import path from 'path';
 
+import { isSafeAttachmentName } from '../../attachment-safety.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
+import { getInboundSourceSessionId, getMostRecentPeerSourceSessionId } from '../../db/session-db.js';
 import { getSession } from '../../db/sessions.js';
 import { wakeContainer } from '../../container-runner.js';
 import { log } from '../../log.js';
-import { resolveSession, sessionDir, writeSessionMessage } from '../../session-manager.js';
+import { openInboundDb, resolveSession, sessionDir, writeSessionMessage } from '../../session-manager.js';
 import type { Session } from '../../types.js';
 import { hasDestination } from './db/agent-destinations.js';
+
+export { isSafeAttachmentName };
 
 export interface ForwardedAttachment {
   name: string;
   filename: string;
   type: 'file';
   localPath: string;
-}
-
-/**
- * Is `name` safe to use as the last segment of a path inside the target
- * agent's inbox directory? Filenames arrive in messages_out content from
- * the source agent — under a multi-agent setup with heterogenous providers
- * (or a compromised / hallucinating sub-agent) they can't be trusted.
- *
- * Rejects:
- *   - empty string
- *   - `.` / `..` (traversal sentinels that path.basename returns as-is)
- *   - anything containing a path separator (`/` or `\`) or NUL
- *   - any value where `path.basename(name) !== name`, catching OS-specific
- *     separators and covering drives/prefixes on Windows runtimes
- */
-export function isSafeAttachmentName(name: string): boolean {
-  if (typeof name !== 'string' || name.length === 0) return false;
-  if (name === '.' || name === '..') return false;
-  if (/[\\/\0]/.test(name)) return false;
-  return path.basename(name) === name;
 }
 
 /**
@@ -118,6 +102,61 @@ export interface RoutableAgentMessage {
   id: string;
   platform_id: string | null;
   content: string;
+  /**
+   * For replies, the id of the inbound message being replied to. The
+   * container's formatter sets this from the first inbound in the batch
+   * (`container/agent-runner/src/formatter.ts`). Used here to route the
+   * reply back to the originating session — see `resolveTargetSession`.
+   */
+  in_reply_to: string | null;
+}
+
+/**
+ * Pick which session of `targetAgentGroupId` should receive this a2a message.
+ *
+ * Three layers, highest-fidelity first:
+ *
+ * 1. **Direct return-path** (in_reply_to lookup): if the message is a reply
+ *    (`in_reply_to` set), open the source agent's inbound DB and read the
+ *    triggering row's `source_session_id`. That column was stamped when the
+ *    original outbound was routed — it's the session that started the
+ *    conversation, and replies should land there even when the target has
+ *    multiple active sessions.
+ *
+ * 2. **Peer-affinity fallback**: if (1) misses (in_reply_to is null or the
+ *    referenced row isn't an a2a inbound), look up the most recent a2a
+ *    inbound *from the target agent group* in source's inbound and use its
+ *    `source_session_id`. The intuition: the last time this peer talked to
+ *    me, which target session was driving? Route the reply there, since
+ *    that's the session most plausibly in active conversation.
+ *
+ * 3. **Newest active session**: legacy heuristic. Used when no prior a2a
+ *    has been recorded with `source_session_id` (e.g. fresh installs,
+ *    pre-migration data).
+ */
+function resolveTargetSession(msg: RoutableAgentMessage, sourceSession: Session, targetAgentGroupId: string): Session {
+  const srcDb = openInboundDb(sourceSession.agent_group_id, sourceSession.id);
+  let originSessionId: string | null = null;
+  try {
+    if (msg.in_reply_to) {
+      originSessionId = getInboundSourceSessionId(srcDb, msg.in_reply_to);
+    }
+    if (!originSessionId) {
+      // Peer-affinity fallback — covers the case where the container's
+      // outbound write didn't carry in_reply_to (e.g. legacy MCP send_message
+      // path, container running pre-fix code).
+      originSessionId = getMostRecentPeerSourceSessionId(srcDb, targetAgentGroupId);
+    }
+  } finally {
+    srcDb.close();
+  }
+  if (originSessionId) {
+    const candidate = getSession(originSessionId);
+    if (candidate && candidate.agent_group_id === targetAgentGroupId && candidate.status === 'active') {
+      return candidate;
+    }
+  }
+  return resolveSession(targetAgentGroupId, null, null, 'agent-shared').session;
 }
 
 export async function routeAgentMessage(msg: RoutableAgentMessage, session: Session): Promise<void> {
@@ -136,7 +175,7 @@ export async function routeAgentMessage(msg: RoutableAgentMessage, session: Sess
   if (!getAgentGroup(targetAgentGroupId)) {
     throw new Error(`target agent group ${targetAgentGroupId} not found for message ${msg.id}`);
   }
-  const { session: targetSession } = resolveSession(targetAgentGroupId, null, null, 'agent-shared');
+  const targetSession = resolveTargetSession(msg, session, targetAgentGroupId);
   const a2aMsgId = `a2a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   // If the source message references files (via `send_file`), forward the
@@ -154,6 +193,7 @@ export async function routeAgentMessage(msg: RoutableAgentMessage, session: Sess
     channelType: 'agent',
     threadId: null,
     content: forwardedContent,
+    sourceSessionId: session.id,
   });
   log.info('Agent message routed', {
     from: session.agent_group_id,
