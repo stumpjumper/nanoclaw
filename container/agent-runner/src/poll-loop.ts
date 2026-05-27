@@ -1,4 +1,4 @@
-import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
+import { findByName, getAllDestinations, getSessionRouting, type DestinationEntry } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
@@ -402,6 +402,22 @@ function dispatchResultText(text: string, routing: RoutingContext): void {
     const all = getAllDestinations();
     if (all.length === 1) {
       sendToDestination(all[0], scratchpad, routing);
+      return;
+    }
+    // Fallback for scheduled tasks: task rows have no routing and the
+    // destinations table may be empty, but session_routing always records
+    // the session's primary channel. Use it so plain-text task responses
+    // are delivered without requiring an explicit send_message call.
+    const sr = getSessionRouting();
+    if (sr) {
+      writeMessageOut({
+        id: generateId(),
+        kind: 'chat',
+        platform_id: sr.platformId,
+        channel_type: sr.channelType,
+        thread_id: null,
+        content: JSON.stringify({ text: scratchpad }),
+      });
       return;
     }
   }

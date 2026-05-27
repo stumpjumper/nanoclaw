@@ -72,6 +72,25 @@ export function findByRouting(
   return row ? rowToEntry(row) : undefined;
 }
 
+interface SessionRoutingRow {
+  channel_type: string;
+  platform_id: string;
+}
+
+/**
+ * Read the session's primary channel from session_routing (row id=1).
+ * Returns null if the table is empty or the row has no channel info.
+ * Used as a last-resort fallback so scheduled-task plain-text responses
+ * are delivered even when inbound routing and the destinations table are both empty.
+ */
+export function getSessionRouting(): { channelType: string; platformId: string } | null {
+  const row = getInboundDb()
+    .prepare('SELECT channel_type, platform_id FROM session_routing WHERE id = 1')
+    .get() as SessionRoutingRow | undefined;
+  if (!row?.channel_type || !row?.platform_id) return null;
+  return { channelType: row.channel_type, platformId: row.platform_id };
+}
+
 /**
  * Generate the system-prompt addendum: agent identity + destination map.
  *
