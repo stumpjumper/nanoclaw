@@ -65,6 +65,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     maxMessagesPerPrompt: row.max_messages_per_prompt ?? undefined,
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,
+    env: JSON.parse(row.env) as Record<string, string>,
   };
 }
 
@@ -85,18 +86,6 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  // Preserve any env vars already written to container.json (e.g. YouTube API key)
-  // until env is fully migrated into the DB schema.
-  if (fs.existsSync(p)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<ContainerConfig>;
-      if (existing.env) config.env = { ...existing.env, ...config.env };
-    } catch {
-      // ignore parse errors
-    }
-  }
-
   fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
 
   return config;
