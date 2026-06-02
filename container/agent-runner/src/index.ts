@@ -17,7 +17,7 @@
  *       container.json  ← per-group config (RO nested mount)
  *     global/           ← shared global memory (RO)
  *   /app/src/           ← shared agent-runner source (RO)
- *   /app/skills/        ← shared skills (RO)
+ *   /container/skills/  ← shared skills (RO)
  *   /home/node/.claude/ ← Claude SDK state + skill symlinks (RW)
  */
 

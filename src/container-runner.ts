@@ -319,7 +319,7 @@ function buildMounts(
   // Shared skills — read-only, symlinks in .claude-shared/skills/ point here.
   const skillsSrc = path.join(projectRoot, 'container', 'skills');
   if (fs.existsSync(skillsSrc)) {
-    mounts.push({ hostPath: skillsSrc, containerPath: '/app/skills', readonly: true });
+    mounts.push({ hostPath: skillsSrc, containerPath: '/container/skills', readonly: true });
   }
 
   // Additional mounts from container config
@@ -338,7 +338,7 @@ function buildMounts(
 
 /**
  * Sync skill symlinks in .claude-shared/skills/ to match the container.json
- * selection. Each symlink points to a container path (/app/skills/<name>)
+ * selection. Each symlink points to a container path (/container/skills/<name>)
  * so it's dangling on the host but valid inside the container.
  */
 function syncSkillSymlinks(claudeDir: string, containerConfig: import('./container-config.js').ContainerConfig): void {
@@ -393,7 +393,7 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
       /* missing */
     }
     if (!exists) {
-      fs.symlinkSync(`/app/skills/${skill}`, linkPath);
+      fs.symlinkSync(`/container/skills/${skill}`, linkPath);
     }
   }
 }
