@@ -165,26 +165,30 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `Upstream sync failed — merge conflict or build failure`,
-              body: [
-                'The automated sync with `qwibitai/nanoclaw` main failed.',
-                '',
-                'This usually means upstream made changes that conflict with this fork\'s channel code.',
-                '',
-                'To resolve manually:',
-                '```bash',
-                'git fetch upstream main',
-                'git merge upstream/main',
-                '# resolve conflicts',
-                'pnpm install --frozen-lockfile && pnpm run build && pnpm exec vitest run',
-                'git push',
-                '```',
-              ].join('\n'),
-              labels: ['upstream-sync']
-            });
+            try {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Upstream sync failed — merge conflict or build failure`,
+                body: [
+                  'The automated sync with `qwibitai/nanoclaw` main failed.',
+                  '',
+                  'This usually means upstream made changes that conflict with this fork\'s channel code.',
+                  '',
+                  'To resolve manually:',
+                  '```bash',
+                  'git fetch upstream main',
+                  'git merge upstream/main',
+                  '# resolve conflicts',
+                  'pnpm install --frozen-lockfile && pnpm run build && pnpm exec vitest run',
+                  'git push',
+                  '```',
+                ].join('\n'),
+                labels: ['upstream-sync']
+              });
+            } catch (e) {
+              core.warning(`Could not open issue (Issues may be disabled on this fork): ${e.message}`);
+            }
 
       - name: Open issue for failed skill merges
         if: steps.merge.outputs.failed != ''
