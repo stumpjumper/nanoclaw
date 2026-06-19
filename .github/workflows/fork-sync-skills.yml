@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   sync-and-merge:
-    if: github.repository != 'qwibitai/nanoclaw'
+    if: github.repository != 'qwibitai/nanoclaw' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
