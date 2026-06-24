@@ -30,7 +30,7 @@ export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
-  execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe' });
+  execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe', timeout: 15000 });
 }
 
 /** Ensure the container runtime is running, starting it if needed. */
@@ -71,6 +71,7 @@ export function cleanupOrphans(): void {
       {
         stdio: ['pipe', 'pipe', 'pipe'],
         encoding: 'utf-8',
+        timeout: 10000,
       },
     );
     const orphans = output.trim().split('\n').filter(Boolean);
