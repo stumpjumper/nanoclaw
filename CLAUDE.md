@@ -195,6 +195,14 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 | `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials |
 | `/migrate-memory` | Carry a group's agent memory across a provider switch (operator-run, both directions) |
 
+## Adding a New Telegram Group (this installation)
+
+**Use `/manage-channels`. Do not attempt this manually.**
+
+The skill handles group ID discovery (via a pairing code — no `@userinfobot` needed), agent group creation, wiring, destinations, and container config in one flow. Doing it by hand with `ncl` commands has known bugs (`ncl groups create` generates a UUID ID that OneCLI rejects, and doesn't create the required `container_configs` row).
+
+If there is a genuinely unavoidable reason to do it manually, read `.claude/skills/manage-channels/SKILL.md` first — it describes the correct `setup/index.ts` commands that avoid those bugs.
+
 ## Contributing
 
 Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, `SKILL.md` format rules, and the pre-submission checklist.

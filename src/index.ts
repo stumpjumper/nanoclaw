@@ -10,13 +10,14 @@ import { backfillContainerConfigs } from './backfill-container-configs.js';
 import { DATA_DIR } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
-import { initDb } from './db/connection.js';
+import { initDb, getDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
+import { readEnvFile } from './env.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
 
 // Response + shutdown registries live in response-registry.ts to break the
@@ -67,6 +68,72 @@ import {
   teardownChannelAdapters,
   createChannelDeliveryAdapter,
 } from './channels/channel-registry.js';
+
+/**
+ * Send a Telegram DM to the owner when a channel adapter fails to start.
+ * Best-effort: logs and returns on any failure rather than throwing.
+ */
+async function notifyChannelFailure(channel: string, err: unknown): Promise<void> {
+  const env = readEnvFile(['TELEGRAM_BOT_TOKEN']);
+  const token = env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    log.warn('Cannot send channel failure alert: TELEGRAM_BOT_TOKEN not set', { channel });
+    return;
+  }
+
+  const db = getDb();
+  const owner = db
+    .prepare<[], { user_id: string }>("SELECT user_id FROM user_roles WHERE role = 'owner' LIMIT 1")
+    .get();
+  if (!owner) {
+    log.warn('Cannot send channel failure alert: no owner found', { channel });
+    return;
+  }
+
+  const dmRow = db
+    .prepare<[string], { messaging_group_id: string }>(
+      "SELECT messaging_group_id FROM user_dms WHERE user_id = ? AND channel_type = 'telegram'",
+    )
+    .get(owner.user_id);
+  if (!dmRow) {
+    log.warn('Cannot send channel failure alert: owner has no Telegram DM', {
+      channel,
+      userId: owner.user_id,
+    });
+    return;
+  }
+
+  const mg = db
+    .prepare<[string], { platform_id: string }>('SELECT platform_id FROM messaging_groups WHERE id = ?')
+    .get(dmRow.messaging_group_id);
+  if (!mg) {
+    log.warn('Cannot send channel failure alert: messaging group not found', { channel });
+    return;
+  }
+
+  // platform_id format: "telegram:<chatId>"
+  const chatId = mg.platform_id.split(':').pop();
+  if (!chatId) return;
+
+  const errMsg = err instanceof Error ? err.message : String(err);
+  const text =
+    `⚠️ *NanoClaw channel connect failed*\n\n` +
+    `The \`${channel}\` adapter failed to start.\n` +
+    `\`\`\`\n${errMsg.slice(0, 300)}\n\`\`\``;
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
+    });
+    if (!res.ok) {
+      log.warn('Telegram channel failure alert returned non-OK', { channel, status: res.status });
+    }
+  } catch (fetchErr) {
+    log.warn('Failed to send Telegram channel failure alert', { channel, fetchErr });
+  }
+}
 
 async function main(): Promise<void> {
   log.info('NanoClaw starting');
@@ -151,7 +218,7 @@ async function main(): Promise<void> {
         });
       },
     };
-  });
+  }, notifyChannelFailure);
 
   // 4. Delivery adapter bridge — dispatches to channel adapters by EXACT
   // registry key (instance ?? channelType): a named instance with an

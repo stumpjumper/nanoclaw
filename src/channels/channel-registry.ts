@@ -120,8 +120,13 @@ export function getChannelContainerConfig(name: string): ChannelRegistration['co
 /**
  * Instantiate and set up all registered channel adapters.
  * Skips adapters that return null (missing credentials).
+ * If `onAdapterFailure` is provided it is called (best-effort) when an adapter
+ * fails to start — useful for operator alerting.
  */
-export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => ChannelSetup): Promise<void> {
+export async function initChannelAdapters(
+  setupFn: (adapter: ChannelAdapter) => ChannelSetup,
+  onAdapterFailure?: (channel: string, err: unknown) => void | Promise<void>,
+): Promise<void> {
   for (const [name, registration] of registry) {
     try {
       const adapter = await registration.factory();
@@ -168,6 +173,13 @@ export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => 
       log.info('Channel adapter started', { channel: name, type: adapter.channelType, instance: key });
     } catch (err) {
       log.error('Failed to start channel adapter', { channel: name, err });
+      if (onAdapterFailure) {
+        try {
+          await onAdapterFailure(name, err);
+        } catch (notifyErr) {
+          log.warn('Channel failure notification threw', { channel: name, notifyErr });
+        }
+      }
     }
   }
 }
