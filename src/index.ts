@@ -91,9 +91,10 @@ async function notifyChannelFailure(channel: string, err: unknown): Promise<void
   }
 
   const dmRow = db
-    .prepare<[string], { messaging_group_id: string }>(
-      "SELECT messaging_group_id FROM user_dms WHERE user_id = ? AND channel_type = 'telegram'",
-    )
+    .prepare<
+      [string],
+      { messaging_group_id: string }
+    >("SELECT messaging_group_id FROM user_dms WHERE user_id = ? AND channel_type = 'telegram'")
     .get(owner.user_id);
   if (!dmRow) {
     log.warn('Cannot send channel failure alert: owner has no Telegram DM', {
