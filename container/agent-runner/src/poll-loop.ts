@@ -1,4 +1,4 @@
-import { findByName, getAllDestinations, getSessionRouting, type DestinationEntry } from './destinations.js';
+import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
@@ -640,8 +640,8 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
   const toolAlreadySent = consumeToolSentThisTurn();
 
   // Single-destination shortcut: the agent wrote plain text — send to
-  // the session's originating channel (from session_routing) if available,
-  // otherwise fall back to the single destination.
+  // the session's originating channel if this turn had direct routing,
+  // otherwise fall back to the single configured destination.
   if (sent === 0 && scratchpad && !toolAlreadySent) {
     if (routing.channelType && routing.platformId) {
       writeMessageOut({
@@ -658,21 +658,6 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
     const all = getAllDestinations();
     if (all.length === 1) {
       sendToDestination(all[0], scratchpad, routing);
-      return { sent: 1, hasUnwrapped: false };
-    }
-    // Fallback for scheduled tasks: task rows have no routing and the
-    // destinations table may be empty, but session_routing always records
-    // the session's primary channel.
-    const sr = getSessionRouting();
-    if (sr) {
-      writeMessageOut({
-        id: generateId(),
-        kind: 'chat',
-        platform_id: sr.platformId,
-        channel_type: sr.channelType,
-        thread_id: null,
-        content: JSON.stringify({ text: scratchpad }),
-      });
       return { sent: 1, hasUnwrapped: false };
     }
   }
