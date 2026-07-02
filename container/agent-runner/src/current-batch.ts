@@ -28,26 +28,29 @@ export function getCurrentInReplyTo(): string | null {
 }
 
 /**
- * Tracks whether `send_message`/`send_file` already delivered content
- * during the turn currently in flight. Poll-loop's end-of-turn fallback
- * (auto-delivering unwrapped bare text) reads and clears this via
- * `consumeToolSentThisTurn()` once per 'result' event, so it never leaks
- * into the next turn.
+ * Bodies of content already delivered via `send_message`/`send_file` during
+ * the turn currently in flight. Poll-loop's end-of-turn text (both bare
+ * scratchpad and wrapped `<message>` blocks) is checked against this list —
+ * via `consumeToolSentBodiesThisTurn()`, once per 'result' event — so it
+ * never leaks into the next turn.
  *
- * Exists because a turn ending in bare, unwrapped text that restates
- * content already sent via a tool call was being auto-delivered a second
- * time (the "double message" bug) — the fallback had no way to know a
- * send already happened this turn.
+ * Exists because a turn that calls the tool and then *also* repeats the
+ * same content in its final output (bare, or wrapped in its own
+ * `<message>` block) was being delivered a second time — the "double
+ * message" bug. Tracking exact bodies (not just "a tool fired") lets the
+ * dedup be precise: only content that's a verbatim repeat gets dropped,
+ * so a turn that legitimately sends a brief tool-based ack and then a
+ * genuinely different final message is untouched.
  */
-let toolSentThisTurn = false;
+let toolSentBodiesThisTurn: string[] = [];
 
-export function markToolSentThisTurn(): void {
-  toolSentThisTurn = true;
+export function recordToolSentBody(text: string): void {
+  toolSentBodiesThisTurn.push(text.trim());
 }
 
-export function consumeToolSentThisTurn(): boolean {
-  const sent = toolSentThisTurn;
-  toolSentThisTurn = false;
-  return sent;
+export function consumeToolSentBodiesThisTurn(): string[] {
+  const bodies = toolSentBodiesThisTurn;
+  toolSentBodiesThisTurn = [];
+  return bodies;
 }
 

@@ -3,7 +3,7 @@ import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } 
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { clearContinuation, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
-import { clearCurrentInReplyTo, consumeToolSentThisTurn, setCurrentInReplyTo } from './current-batch.js';
+import { clearCurrentInReplyTo, consumeToolSentBodiesThisTurn, setCurrentInReplyTo } from './current-batch.js';
 import {
   formatMessages,
   extractRouting,
@@ -603,6 +603,15 @@ function deliverErrorResult(text: string, routing: RoutingContext): void {
 function dispatchResultText(text: string, routing: RoutingContext): { sent: number; hasUnwrapped: boolean } {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
+  // Exact bodies send_message/send_file already delivered earlier in this
+  // same turn. A turn that calls the tool and then *also* repeats that
+  // content in its final output — bare, or wrapped in its own <message>
+  // block — was delivering it a second time (the "double message" bug).
+  // Matching on exact content (not just "did a tool fire") means only
+  // verbatim repeats get dropped; a tool-based ack followed by genuinely
+  // different final content is untouched.
+  const alreadySent = consumeToolSentBodiesThisTurn();
+
   let match: RegExpExecArray | null;
   let sent = 0;
   let lastIndex = 0;
@@ -622,6 +631,10 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
       scratchpadParts.push(`[dropped: unknown destination "${toName}"] ${body}`);
       continue;
     }
+    if (alreadySent.includes(body)) {
+      log(`Dropping <message to="${toName}"> — identical content already sent via send_message/send_file this turn`);
+      continue;
+    }
     sendToDestination(dest, body, routing);
     sent++;
   }
@@ -630,19 +643,12 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
   }
 
   const scratchpad = stripInternalTags(scratchpadParts.join(''));
-
-  // If send_message/send_file already delivered content earlier in this
-  // same turn, bare trailing text is almost always the agent restating
-  // what it just sent (not new content) — auto-delivering it too produced
-  // duplicate messages to the user. Treat it as scratchpad instead. This
-  // also skips the "unwrapped" retry-nudge below: the turn already
-  // delivered successfully via the tool, so there's nothing to re-wrap.
-  const toolAlreadySent = consumeToolSentThisTurn();
+  const scratchpadIsDuplicate = !!scratchpad && alreadySent.includes(scratchpad.trim());
 
   // Single-destination shortcut: the agent wrote plain text — send to
   // the session's originating channel if this turn had direct routing,
   // otherwise fall back to the single configured destination.
-  if (sent === 0 && scratchpad && !toolAlreadySent) {
+  if (sent === 0 && scratchpad && !scratchpadIsDuplicate) {
     if (routing.channelType && routing.platformId) {
       writeMessageOut({
         id: generateId(),
@@ -663,16 +669,16 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
   }
 
   if (scratchpad) {
-    if (toolAlreadySent && sent === 0) {
+    if (scratchpadIsDuplicate) {
       log(
-        `[scratchpad, suppressed — send_message/send_file already sent this turn] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`,
+        `[scratchpad, suppressed — identical content already sent via send_message/send_file this turn] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`,
       );
     } else {
       log(`[scratchpad] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`);
     }
   }
 
-  const hasUnwrapped = sent === 0 && !!scratchpad && !toolAlreadySent;
+  const hasUnwrapped = sent === 0 && !!scratchpad && !scratchpadIsDuplicate;
   if (hasUnwrapped) {
     log(`WARNING: agent output had no <message to="..."> blocks — nothing was sent`);
   }
