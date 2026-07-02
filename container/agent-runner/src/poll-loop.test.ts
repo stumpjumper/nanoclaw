@@ -438,6 +438,66 @@ describe('error result with no <message> envelope', () => {
   });
 });
 
+describe('duplicate-send suppression', () => {
+  it('does not auto-deliver bare trailing text when send_message already sent this turn', async () => {
+    const { markToolSentThisTurn } = await import('./current-batch.js');
+    const { writeMessageOut } = await import('./db/messages-out.js');
+
+    // Simulate the agent having already called send_message mid-turn with
+    // the briefing text (this is what the MCP tool handler does).
+    writeMessageOut({
+      id: 'tool-sent-1',
+      kind: 'chat',
+      platform_id: ERR_ROUTING.platformId,
+      channel_type: ERR_ROUTING.channelType,
+      thread_id: ERR_ROUTING.threadId,
+      content: JSON.stringify({ text: 'the briefing' }),
+    });
+    markToolSentThisTurn();
+
+    // The turn then ends with the same content again, unwrapped — this is
+    // the pattern that used to be auto-delivered a second time.
+    const { query, pushes } = makeResultQuery({ type: 'result', text: 'the briefing' });
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    // Only the tool-sent message should exist — no duplicate, and no
+    // re-wrap nudge (the turn already delivered successfully).
+    expect(getUndeliveredMessages()).toHaveLength(1);
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('does not leak the tool-sent flag into the next turn', async () => {
+    // No direct channel/platform routing, but a single registered
+    // destination — this is the scheduled-task shape (task rows have null
+    // routing) where the single-destination shortcut is what auto-delivers
+    // bare text.
+    const noRouting = { platformId: null, channelType: null, threadId: null, inReplyTo: 'm1' };
+    getInboundDb()
+      .prepare('INSERT INTO destinations (name, display_name, type, channel_type, platform_id) VALUES (?, ?, ?, ?, ?)')
+      .run('spuds', 'Spuds', 'channel', 'telegram', 'chan-spuds');
+
+    const { markToolSentThisTurn } = await import('./current-batch.js');
+    markToolSentThisTurn();
+
+    // First turn "consumes" the flag via a bare-text result — must not
+    // auto-deliver even though a single destination is available.
+    const first = makeResultQuery({ type: 'result', text: 'sent via tool, restated here' });
+    await processQuery(first.query, noRouting, ['m1'], 'claude', undefined, 'prompt', undefined);
+    expect(getUndeliveredMessages()).toHaveLength(0);
+    expect(first.pushes).toHaveLength(0);
+
+    // A later turn with no tool call and bare text should behave normally
+    // (auto-deliver via the single-destination shortcut) — the
+    // suppression from the prior turn must not persist.
+    const second = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
+    await processQuery(second.query, noRouting, ['m2'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(1);
+    expect(second.pushes).toHaveLength(0);
+  });
+});
+
 describe('isCorruptionError', () => {
   it('matches the Docker Desktop macOS torn-read symptom', () => {
     expect(isCorruptionError('database disk image is malformed')).toBe(true);

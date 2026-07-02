@@ -3,7 +3,7 @@ import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } 
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import { clearContinuation, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
-import { clearCurrentInReplyTo, setCurrentInReplyTo } from './current-batch.js';
+import { clearCurrentInReplyTo, consumeToolSentThisTurn, setCurrentInReplyTo } from './current-batch.js';
 import {
   formatMessages,
   extractRouting,
@@ -631,10 +631,18 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
 
   const scratchpad = stripInternalTags(scratchpadParts.join(''));
 
+  // If send_message/send_file already delivered content earlier in this
+  // same turn, bare trailing text is almost always the agent restating
+  // what it just sent (not new content) — auto-delivering it too produced
+  // duplicate messages to the user. Treat it as scratchpad instead. This
+  // also skips the "unwrapped" retry-nudge below: the turn already
+  // delivered successfully via the tool, so there's nothing to re-wrap.
+  const toolAlreadySent = consumeToolSentThisTurn();
+
   // Single-destination shortcut: the agent wrote plain text — send to
   // the session's originating channel (from session_routing) if available,
   // otherwise fall back to the single destination.
-  if (sent === 0 && scratchpad) {
+  if (sent === 0 && scratchpad && !toolAlreadySent) {
     if (routing.channelType && routing.platformId) {
       writeMessageOut({
         id: generateId(),
@@ -670,10 +678,16 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
   }
 
   if (scratchpad) {
-    log(`[scratchpad] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`);
+    if (toolAlreadySent && sent === 0) {
+      log(
+        `[scratchpad, suppressed — send_message/send_file already sent this turn] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`,
+      );
+    } else {
+      log(`[scratchpad] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`);
+    }
   }
 
-  const hasUnwrapped = sent === 0 && !!scratchpad;
+  const hasUnwrapped = sent === 0 && !!scratchpad && !toolAlreadySent;
   if (hasUnwrapped) {
     log(`WARNING: agent output had no <message to="..."> blocks — nothing was sent`);
   }
