@@ -648,15 +648,28 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
   // Single-destination shortcut: the agent wrote plain text — send to
   // the session's originating channel if this turn had direct routing,
   // otherwise fall back to the single configured destination.
+  //
+  // Scope: this whole fallback family (this branch and the single-
+  // destination one below) assumes one channel per session. Re-resolving
+  // via resolveDestinationThread keeps this branch's thread_id fresh
+  // rather than reusing the frozen `routing` object from the start of the
+  // batch, matching sendToDestination's per-destination resolution. It
+  // does NOT protect against a genuinely different *channel* answering a
+  // stale `routing` — upstream removed the equivalent shortcut in 9db39b29
+  // specifically because that can misdeliver in agent-shared sessions
+  // (one session serving multiple channels). No group in this install
+  // uses agent-shared session_mode, so that risk is currently dormant —
+  // revisit this fallback family before turning agent-shared on anywhere.
   if (sent === 0 && scratchpad && !scratchpadIsDuplicate) {
     if (routing.channelType && routing.platformId) {
+      const destRouting = resolveDestinationThread(routing.channelType, routing.platformId);
       writeMessageOut({
         id: generateId(),
-        in_reply_to: routing.inReplyTo,
+        in_reply_to: destRouting?.inReplyTo ?? routing.inReplyTo,
         kind: 'chat',
         platform_id: routing.platformId,
         channel_type: routing.channelType,
-        thread_id: routing.threadId,
+        thread_id: destRouting?.threadId ?? routing.threadId,
         content: JSON.stringify({ text: scratchpad }),
       });
       return { sent: 1, hasUnwrapped: false };

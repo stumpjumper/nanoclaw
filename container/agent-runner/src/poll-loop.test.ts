@@ -568,6 +568,40 @@ describe('duplicate-send suppression', () => {
   });
 });
 
+describe('direct-routing shortcut thread refresh', () => {
+  it('uses the freshest thread_id for this channel instead of the frozen routing value', async () => {
+    // routing is frozen from the start of the batch (a stale thread id);
+    // a newer message_in row for the same channel+platform carries the
+    // thread the conversation has actually moved to since.
+    const staleRouting = { platformId: 'chan-1', channelType: 'discord', threadId: 'stale-thread', inReplyTo: 'm0' };
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, trigger, channel_type, platform_id, thread_id, content)
+         VALUES ('m-fresh', 'chat', datetime('now'), 'pending', 1, 'discord', 'chan-1', 'fresh-thread', '{}')`,
+      )
+      .run();
+
+    const { query } = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
+    await processQuery(query, staleRouting, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(out[0].thread_id).toBe('fresh-thread');
+    expect(out[0].in_reply_to).toBe('m-fresh');
+  });
+
+  it('falls back to the frozen routing thread_id when no message_in row matches', async () => {
+    const staleRouting = { platformId: 'chan-2', channelType: 'discord', threadId: 'only-known-thread', inReplyTo: 'm0' };
+
+    const { query } = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
+    await processQuery(query, staleRouting, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(out[0].thread_id).toBe('only-known-thread');
+  });
+});
+
 describe('isCorruptionError', () => {
   it('matches the Docker Desktop macOS torn-read symptom', () => {
     expect(isCorruptionError('database disk image is malformed')).toBe(true);
