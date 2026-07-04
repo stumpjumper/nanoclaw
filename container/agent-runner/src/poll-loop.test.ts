@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
 import { getPendingMessages, markCompleted } from './db/messages-in.js';
-import { getUndeliveredMessages } from './db/messages-out.js';
+import { getUndeliveredMessages, writeMessageOut } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
 import { isCorruptionError, processQuery } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
@@ -427,10 +427,33 @@ describe('error result with no <message> envelope', () => {
     expect(pushes).toHaveLength(0);
   });
 
-  it('still nudges (and does not deliver) a normal unwrapped result', async () => {
+  it('auto-delivers a normal unwrapped result when the turn has direct routing (fork fallback)', async () => {
+    // Upstream nudges here instead; this fork's direct-routing fallback
+    // delivers bare text to the originating channel so replies are never
+    // silently dropped. The nudge is reserved for turns nothing can rescue.
     const { query, pushes } = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('bare text, no envelope');
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('still nudges (and does not deliver) an unwrapped result no fallback can rescue', async () => {
+    // No direct routing and two destinations — the single-destination
+    // shortcut can't pick one, so the strict-wrap nudge fires.
+    const noRouting = { platformId: null, channelType: null, threadId: null, inReplyTo: 'm1' };
+    const insertDest = getInboundDb().prepare(
+      'INSERT INTO destinations (name, display_name, type, channel_type, platform_id) VALUES (?, ?, ?, ?, ?)',
+    );
+    insertDest.run('telegram', 'Telegram', 'channel', 'telegram', 'chan-1');
+    insertDest.run('slack', 'Slack', 'channel', 'slack', 'chan-2');
+
+    const { query, pushes } = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
+
+    await processQuery(query, noRouting, ['m1'], 'claude', undefined, 'prompt', undefined);
 
     expect(getUndeliveredMessages()).toHaveLength(0);
     expect(pushes).toHaveLength(1);
@@ -438,26 +461,52 @@ describe('error result with no <message> envelope', () => {
   });
 });
 
+/**
+ * Build a stub query that simulates the agent calling send_message mid-turn
+ * and then ending the turn with `result`. In production the MCP tool runs
+ * in a SEPARATE process, so the only signal the poll loop can see is the
+ * messages_out row the tool writes — which is exactly what this helper
+ * writes, after the query has started (i.e. after the dedup floor was
+ * snapshotted at processQuery entry).
+ */
+function makeToolSendingQuery(
+  toolTexts: string[],
+  result: ProviderEvent,
+): { query: AgentQuery; pushes: string[] } {
+  const pushes: string[] = [];
+  async function* events(): AsyncGenerator<ProviderEvent> {
+    yield { type: 'init', continuation: 'sess-1' };
+    for (const [i, text] of toolTexts.entries()) {
+      writeMessageOut({
+        id: `tool-sent-${i}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'chat',
+        platform_id: ERR_ROUTING.platformId,
+        channel_type: ERR_ROUTING.channelType,
+        thread_id: null,
+        content: JSON.stringify({ text }),
+      });
+    }
+    yield result;
+  }
+  return {
+    pushes,
+    query: {
+      push: (m: string) => {
+        pushes.push(m);
+      },
+      end: () => {},
+      events: events(),
+      abort: () => {},
+    },
+  };
+}
+
 describe('duplicate-send suppression', () => {
   it('does not auto-deliver bare trailing text when send_message already sent identical content this turn', async () => {
-    const { recordToolSentBody } = await import('./current-batch.js');
-    const { writeMessageOut } = await import('./db/messages-out.js');
-
-    // Simulate the agent having already called send_message mid-turn with
-    // the briefing text (this is what the MCP tool handler does).
-    writeMessageOut({
-      id: 'tool-sent-1',
-      kind: 'chat',
-      platform_id: ERR_ROUTING.platformId,
-      channel_type: ERR_ROUTING.channelType,
-      thread_id: ERR_ROUTING.threadId,
-      content: JSON.stringify({ text: 'the briefing' }),
-    });
-    recordToolSentBody('the briefing');
-
-    // The turn then ends with the same content again, unwrapped — this is
-    // the pattern that used to be auto-delivered a second time.
-    const { query, pushes } = makeResultQuery({ type: 'result', text: 'the briefing' });
+    // The turn sends the briefing via the tool, then ends with the same
+    // content again, unwrapped — the pattern that used to be auto-delivered
+    // a second time.
+    const { query, pushes } = makeToolSendingQuery(['the briefing'], { type: 'result', text: 'the briefing' });
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
 
@@ -467,30 +516,36 @@ describe('duplicate-send suppression', () => {
     expect(pushes).toHaveLength(0);
   });
 
+  it('does not auto-deliver a bare trailing summary either, when a tool already delivered this turn', async () => {
+    // The "second short message" pattern: briefing goes out via the tool,
+    // then the turn ends with a different bare "done, sent it" narration.
+    // Bare text is scratchpad by contract; the auto-deliver fallback only
+    // exists to rescue turns that would otherwise deliver nothing.
+    const { query, pushes } = makeToolSendingQuery(['the briefing'], {
+      type: 'result',
+      text: 'Job executed — briefing sent to the group.',
+    });
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('the briefing');
+    // No re-wrap nudge — the turn delivered its real content already.
+    expect(pushes).toHaveLength(0);
+  });
+
   it('does not deliver a wrapped <message> block that repeats content already sent via the tool', async () => {
     // Reproduces the real incident: send_message fails once ("no such
     // tool"), the agent retries it successfully, then ALSO wraps the same
     // text in its own <message> block as the turn's final output. The
     // bare-text fallback never enters into it — this exercises the
     // wrapped-block loop's own dedup.
-    const { recordToolSentBody } = await import('./current-batch.js');
-    const { writeMessageOut } = await import('./db/messages-out.js');
-
     getInboundDb()
       .prepare('INSERT INTO destinations (name, display_name, type, channel_type, platform_id) VALUES (?, ?, ?, ?, ?)')
       .run('telegram', 'Telegram', 'channel', ERR_ROUTING.channelType, ERR_ROUTING.platformId);
 
-    writeMessageOut({
-      id: 'tool-sent-1',
-      kind: 'chat',
-      platform_id: ERR_ROUTING.platformId,
-      channel_type: ERR_ROUTING.channelType,
-      thread_id: ERR_ROUTING.threadId,
-      content: JSON.stringify({ text: 'Still here, Alfred.' }),
-    });
-    recordToolSentBody('Still here, Alfred.');
-
-    const { query, pushes } = makeResultQuery({
+    const { query, pushes } = makeToolSendingQuery(['Still here, Alfred.'], {
       type: 'result',
       text: '<message to="telegram">Still here, Alfred.</message>',
     });
@@ -502,27 +557,14 @@ describe('duplicate-send suppression', () => {
   });
 
   it('still delivers a wrapped <message> block whose content differs from what the tool sent', async () => {
-    // A tool-based ack followed by genuinely different final content must
-    // not be treated as a duplicate — dedup is content-exact, not "a tool
-    // fired at some point."
-    const { recordToolSentBody } = await import('./current-batch.js');
-    const { writeMessageOut } = await import('./db/messages-out.js');
-
+    // A tool-based ack followed by genuinely different final content in an
+    // explicit <message> block must not be treated as a duplicate — the
+    // wrapped-block dedup is content-exact.
     getInboundDb()
       .prepare('INSERT INTO destinations (name, display_name, type, channel_type, platform_id) VALUES (?, ?, ?, ?, ?)')
       .run('telegram', 'Telegram', 'channel', ERR_ROUTING.channelType, ERR_ROUTING.platformId);
 
-    writeMessageOut({
-      id: 'tool-sent-1',
-      kind: 'chat',
-      platform_id: ERR_ROUTING.platformId,
-      channel_type: ERR_ROUTING.channelType,
-      thread_id: ERR_ROUTING.threadId,
-      content: JSON.stringify({ text: 'On it, checking now…' }),
-    });
-    recordToolSentBody('On it, checking now…');
-
-    const { query } = makeResultQuery({
+    const { query } = makeToolSendingQuery(['On it, checking now…'], {
       type: 'result',
       text: '<message to="telegram">Here is the actual answer.</message>',
     });
@@ -536,7 +578,7 @@ describe('duplicate-send suppression', () => {
     );
   });
 
-  it('does not leak tool-sent bodies into the next turn', async () => {
+  it('does not leak tool-sent content into the next turn', async () => {
     // No direct channel/platform routing, but a single registered
     // destination — this is the scheduled-task shape (task rows have null
     // routing) where the single-destination shortcut is what auto-delivers
@@ -546,15 +588,14 @@ describe('duplicate-send suppression', () => {
       .prepare('INSERT INTO destinations (name, display_name, type, channel_type, platform_id) VALUES (?, ?, ?, ?, ?)')
       .run('spuds', 'Spuds', 'channel', 'telegram', 'chan-spuds');
 
-    const { recordToolSentBody } = await import('./current-batch.js');
-    recordToolSentBody('sent via tool, restated here');
-
-    // First turn "consumes" the body via a bare-text result that matches
-    // it exactly — must not auto-deliver even though a single destination
-    // is available.
-    const first = makeResultQuery({ type: 'result', text: 'sent via tool, restated here' });
+    // First turn sends via tool and restates the same text bare — must not
+    // auto-deliver even though a single destination is available.
+    const first = makeToolSendingQuery(['sent via tool, restated here'], {
+      type: 'result',
+      text: 'sent via tool, restated here',
+    });
     await processQuery(first.query, noRouting, ['m1'], 'claude', undefined, 'prompt', undefined);
-    expect(getUndeliveredMessages()).toHaveLength(0);
+    expect(getUndeliveredMessages()).toHaveLength(1);
     expect(first.pushes).toHaveLength(0);
 
     // A later turn with no tool call and bare text should behave normally
@@ -563,7 +604,7 @@ describe('duplicate-send suppression', () => {
     const second = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
     await processQuery(second.query, noRouting, ['m2'], 'claude', undefined, 'prompt', undefined);
 
-    expect(getUndeliveredMessages()).toHaveLength(1);
+    expect(getUndeliveredMessages()).toHaveLength(2);
     expect(second.pushes).toHaveLength(0);
   });
 });

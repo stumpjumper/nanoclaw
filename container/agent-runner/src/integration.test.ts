@@ -114,7 +114,11 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
-  it('bare text produces no outbound messages (scratchpad only)', async () => {
+  it('bare text auto-delivers to the originating channel (fork: direct-routing fallback)', async () => {
+    // Upstream treats bare text as scratchpad and never delivers it
+    // (9db39b29). This fork deliberately reinstated a fallback that
+    // delivers bare text to the originating channel so scheduled-task
+    // replies are never silently dropped — see dispatchResultText.
     insertMessage('m1', { sender: 'Alice', text: 'hello' }, { platformId: 'chan-1', channelType: 'discord' });
 
     // Agent responds with bare text — no <message to="..."> wrapping
@@ -122,12 +126,14 @@ describe('poll loop integration', () => {
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
 
-    // Wait long enough for the poll loop to process
-    await sleep(1000);
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
     controller.abort();
 
     const out = getUndeliveredMessages();
-    expect(out).toHaveLength(0);
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('I am thinking about this...');
+    expect(out[0].platform_id).toBe('chan-1');
+    expect(out[0].channel_type).toBe('discord');
 
     await loopPromise.catch(() => {});
   });
@@ -359,7 +365,17 @@ describe('poll loop — exchange hook (onExchangeComplete)', () => {
   });
 
   it('does not report the internal wrapping-retry nudge as a user prompt', async () => {
-    insertMessage('m1', { sender: 'Alice', text: 'wrap this later' }, { platformId: 'chan-1', channelType: 'discord' });
+    // The nudge only fires when no fallback can deliver the bare text:
+    // this fork auto-delivers bare text when the message has direct
+    // routing or a single destination exists, so use a routing-less
+    // message (the scheduled-task shape) with TWO destinations.
+    getInboundDb()
+      .prepare(
+        `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+         VALUES ('slack-test', 'Slack Test', 'channel', 'slack', 'chan-2', NULL)`,
+      )
+      .run();
+    insertMessage('m1', { sender: 'Alice', text: 'wrap this later' });
 
     let calls = 0;
     const provider = new HookedMockProvider({}, () => {
