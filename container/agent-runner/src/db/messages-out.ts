@@ -81,16 +81,10 @@ export function getMaxMessageOutSeq(): number {
   return (getOutboundDb().prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM messages_out').get() as { m: number }).m;
 }
 
-export interface ToolSentWindow {
-  /** Number of chat messages the MCP tools delivered in the window. */
-  count: number;
-  /** Their trimmed, non-empty text bodies (for exact-content dedup). */
-  texts: string[];
-}
-
 /**
- * What send_message / send_file delivered since `floorSeq` — the poll
- * loop's view of "content already sent during the turn in flight".
+ * Trimmed text bodies send_message / send_file delivered since `floorSeq`
+ * — the poll loop's view of "content already sent during the turn in
+ * flight", used for exact-content duplicate suppression.
  *
  * This is read from messages_out rather than tracked in memory because
  * the MCP tools run in a separate process (the SDK spawns the tools
@@ -100,12 +94,12 @@ export interface ToolSentWindow {
  * Excludes scheduled sends (deliver_after set — nothing was delivered
  * now) and edit/reaction operations.
  */
-export function getToolSentSince(floorSeq: number): ToolSentWindow {
+export function getToolSentTextsSince(floorSeq: number): string[] {
   const rows = getOutboundDb()
     .prepare(`SELECT content FROM messages_out WHERE seq > ? AND kind = 'chat' AND deliver_after IS NULL`)
     .all(floorSeq) as { content: string }[];
 
-  const window: ToolSentWindow = { count: 0, texts: [] };
+  const texts: string[] = [];
   for (const row of rows) {
     let parsed: { text?: unknown; operation?: unknown };
     try {
@@ -114,12 +108,11 @@ export function getToolSentSince(floorSeq: number): ToolSentWindow {
       continue;
     }
     if (!parsed || typeof parsed !== 'object' || parsed.operation) continue;
-    window.count++;
     if (typeof parsed.text === 'string' && parsed.text.trim()) {
-      window.texts.push(parsed.text.trim());
+      texts.push(parsed.text.trim());
     }
   }
-  return window;
+  return texts;
 }
 
 /**

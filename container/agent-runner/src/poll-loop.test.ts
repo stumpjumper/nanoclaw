@@ -516,22 +516,22 @@ describe('duplicate-send suppression', () => {
     expect(pushes).toHaveLength(0);
   });
 
-  it('does not auto-deliver a bare trailing summary either, when a tool already delivered this turn', async () => {
-    // The "second short message" pattern: briefing goes out via the tool,
-    // then the turn ends with a different bare "done, sent it" narration.
-    // Bare text is scratchpad by contract; the auto-deliver fallback only
-    // exists to rescue turns that would otherwise deliver nothing.
+  it('still delivers a bare trailing summary that differs from what the tool sent', async () => {
+    // The briefing goes out via the tool, then the turn ends with a
+    // genuinely different bare summary. Dedup is content-exact — the
+    // operator wants these short recaps after long tool-sent messages.
     const { query, pushes } = makeToolSendingQuery(['the briefing'], {
       type: 'result',
-      text: 'Job executed — briefing sent to the group.',
+      text: 'Job executed — one launch scrubbed, see briefing above.',
     });
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
 
     const out = getUndeliveredMessages();
-    expect(out).toHaveLength(1);
-    expect(JSON.parse(out[0].content).text).toBe('the briefing');
-    // No re-wrap nudge — the turn delivered its real content already.
+    expect(out).toHaveLength(2);
+    expect(out.map((m) => JSON.parse(m.content).text)).toEqual(
+      expect.arrayContaining(['the briefing', 'Job executed — one launch scrubbed, see briefing above.']),
+    );
     expect(pushes).toHaveLength(0);
   });
 

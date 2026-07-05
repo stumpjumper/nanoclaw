@@ -1,6 +1,6 @@
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
-import { getMaxMessageOutSeq, getToolSentSince, writeMessageOut, type ToolSentWindow } from './db/messages-out.js';
+import { getMaxMessageOutSeq, getToolSentTextsSince, writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import {
   clearContinuation,
@@ -493,9 +493,9 @@ export async function processQuery(
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
-        const toolSent = getToolSentSince(toolSentFloorSeq);
+        const toolSentTexts = getToolSentTextsSince(toolSentFloorSeq);
         if (event.text) {
-          const { sent, hasUnwrapped } = dispatchResultText(event.text, routing, toolSent);
+          const { sent, hasUnwrapped } = dispatchResultText(event.text, routing, toolSentTexts);
           if (sent === 0 && event.isError === true) {
             // Non-retryable error turn (e.g. a 403 billing_error) with no
             // <message> envelope: deliver the notice instead of dropping it as
@@ -619,20 +619,19 @@ function deliverErrorResult(text: string, routing: RoutingContext): void {
 function dispatchResultText(
   text: string,
   routing: RoutingContext,
-  toolSent: ToolSentWindow,
+  alreadySent: string[],
 ): { sent: number; hasUnwrapped: boolean } {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
-  // What send_message/send_file already delivered earlier in this same
-  // turn (read from messages_out — the tools run in a separate process,
-  // so the DB rows are the only ledger both sides see). A turn that calls
-  // the tool and then *also* repeats that content in its final output —
-  // bare, or wrapped in its own <message> block — was delivering it a
-  // second time (the "double message" bug). Wrapped blocks are deduped on
-  // exact content, so a tool-based ack followed by a genuinely different
-  // wrapped message is untouched.
-  const alreadySent = toolSent.texts;
-  const toolSentThisTurn = toolSent.count > 0;
+  // `alreadySent` — exact bodies send_message/send_file delivered earlier
+  // in this same turn (read from messages_out; the tools run in a separate
+  // process, so the DB rows are the only ledger both sides see). A turn
+  // that calls the tool and then *also* repeats that content in its final
+  // output — bare, or wrapped in its own <message> block — was delivering
+  // it a second time (the "double message" bug). Dedup is content-exact,
+  // not "did a tool fire": a tool-sent briefing followed by a genuinely
+  // different trailing summary ("done — one launch scrubbed") still
+  // delivers, which the operator wants for long transmissions.
 
   let match: RegExpExecArray | null;
   let sent = 0;
@@ -665,18 +664,16 @@ function dispatchResultText(
   }
 
   const scratchpad = stripInternalTags(scratchpadParts.join(''));
+  const scratchpadIsDuplicate = !!scratchpad && alreadySent.includes(scratchpad.trim());
 
   // Single-destination shortcut: the agent wrote plain text — send to
   // the session's originating channel if this turn had direct routing,
   // otherwise fall back to the single configured destination.
   //
-  // Skipped entirely when a message tool already delivered this turn:
-  // bare text is scratchpad by contract, and this fallback only exists to
-  // rescue turns that would otherwise deliver *nothing* (the scheduled-
-  // task silent-drop problem). If the tool sent the real content, the
-  // trailing bare text is a restatement or a "done, sent it" narration —
-  // delivering it produced either an exact duplicate or a redundant
-  // second summary message.
+  // Skipped when the bare text is an exact repeat of what a message tool
+  // already delivered this turn (the duplicate-briefing bug). A trailing
+  // summary that genuinely differs still delivers — the operator finds
+  // those useful after long tool-sent messages.
   //
   // Scope: this whole fallback family (this branch and the single-
   // destination one below) assumes one channel per session. Re-resolving
@@ -689,7 +686,7 @@ function dispatchResultText(
   // (one session serving multiple channels). No group in this install
   // uses agent-shared session_mode, so that risk is currently dormant —
   // revisit this fallback family before turning agent-shared on anywhere.
-  if (sent === 0 && scratchpad && !toolSentThisTurn) {
+  if (sent === 0 && scratchpad && !scratchpadIsDuplicate) {
     if (routing.channelType && routing.platformId) {
       const destRouting = resolveDestinationThread(routing.channelType, routing.platformId);
       writeMessageOut({
@@ -711,16 +708,16 @@ function dispatchResultText(
   }
 
   if (scratchpad) {
-    if (toolSentThisTurn) {
+    if (scratchpadIsDuplicate) {
       log(
-        `[scratchpad, not delivered — send_message/send_file already delivered content this turn] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`,
+        `[scratchpad, suppressed — identical content already sent via send_message/send_file this turn] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`,
       );
     } else {
       log(`[scratchpad] ${scratchpad.slice(0, 500)}${scratchpad.length > 500 ? '…' : ''}`);
     }
   }
 
-  const hasUnwrapped = sent === 0 && !!scratchpad && !toolSentThisTurn;
+  const hasUnwrapped = sent === 0 && !!scratchpad && !scratchpadIsDuplicate;
   if (hasUnwrapped) {
     log(`WARNING: agent output had no <message to="..."> blocks — nothing was sent`);
   }
