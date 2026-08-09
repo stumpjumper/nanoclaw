@@ -36,6 +36,23 @@ if ! docker info >/dev/null 2>&1; then
   exit 0
 fi
 
+# container/build.sh runs a bare `docker build` with no --pull, so an unchanged
+# base tag is served from cache and the rebuild would refresh nothing — the one
+# thing this job exists to do. Pull the base ourselves first; if its digest
+# moved, every layer above it (Chromium and the other apt packages included)
+# rebuilds against the new one. Read FROM out of the Dockerfile so an upstream
+# Node bump doesn't leave us refreshing a base we no longer use.
+BASE="$(awk '/^FROM /{print $2; exit}' container/Dockerfile)"
+BEFORE="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BASE" 2>/dev/null || echo none)"
+log "pulling base image $BASE"
+docker pull "$BASE" >> "$LOG" 2>&1 || log "WARN: base pull failed — building against the cached base"
+AFTER="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BASE" 2>/dev/null || echo none)"
+if [ "$BEFORE" = "$AFTER" ]; then
+  log "base unchanged ($AFTER)"
+else
+  log "base updated: $BEFORE -> $AFTER"
+fi
+
 if ./container/build.sh >> "$LOG" 2>&1; then
   log "rebuild OK — new spawns will use the refreshed image"
   # Reclaim the layers the rebuild orphaned. Images only; volumes and the
