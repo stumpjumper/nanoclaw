@@ -1,11 +1,11 @@
 # NWS Hourly Forecast
 
-Use `/container/skills/nws-hourly/nws-hourly.py` to get a true hourly weather forecast from the current hour through midnight.
+Use `/app/skills/nws-hourly/nws-hourly.py` to get a true hourly weather forecast from the current hour through midnight.
 
 ## Usage
 
 ```bash
-python3 /container/skills/nws-hourly/nws-hourly.py "87123"
+python3 /app/skills/nws-hourly/nws-hourly.py "87123"
 ```
 
 Accepts a US ZIP code or city name. ZIP code is preferred — more precise.

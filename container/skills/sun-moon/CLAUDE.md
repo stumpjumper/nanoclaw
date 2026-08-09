@@ -1,11 +1,11 @@
 # Sun & Moon Data
 
-Use `/container/skills/sun-moon/sun-moon.py` to get accurate civil twilight, sunrise, sunset, moonrise, moonset, moon phase, and upcoming full/new moon dates.
+Use `/app/skills/sun-moon/sun-moon.py` to get accurate civil twilight, sunrise, sunset, moonrise, moonset, moon phase, and upcoming full/new moon dates.
 
 ## Usage
 
 ```bash
-python3 /container/skills/sun-moon/sun-moon.py "87123"
+python3 /app/skills/sun-moon/sun-moon.py "87123"
 ```
 
 Accepts a US ZIP code or city name. ZIP code is preferred — more precise, and easy to change for travel.
