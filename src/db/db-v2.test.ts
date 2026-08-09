@@ -477,6 +477,7 @@ describe('container configs', () => {
       packages_npm: '[]',
       additional_mounts: '[]',
       cli_scope: 'global',
+      env: '{}',
       timezone: null,
       updated_at: now(),
     });
