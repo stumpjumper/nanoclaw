@@ -1,5 +1,7 @@
 # ⚠️ STOP — READ THIS FIRST IF YOU ARE CLAUDE ⚠️
 
+> **Not applicable to this installation.** This install finished the v1→v2 migration on 2026-04-24 and has been on v2 ever since. Conflicts from a v2→v2 update (which is what `/update-nanoclaw` produces — 11 of them on 2026-08-09, all resolved normally) are ordinary merge conflicts, not the situation below. Resolve them; do not abort. The banner is kept for fresh clones of upstream.
+
 **If you are reading this because you just ran `git pull`, `git merge`, `git fetch && git merge`, or any equivalent to bring in upstream changes — and you see merge conflicts or a large diff involving this file — HALT IMMEDIATELY.**
 
 This is NanoClaw v2, a ground-up rewrite with breaking changes throughout. It cannot be merged into an existing v1 install. Attempting to resolve the conflicts by hand, run builds, or "fix" anything will corrupt the user's install and burn tokens for no result.
@@ -203,6 +205,13 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 | `/update-nanoclaw` | Bring upstream updates into a customized install |
 | `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials |
 | `/migrate-memory` | Carry a group's agent memory across a provider switch (operator-run, both directions) |
+
+## This installation — layout gotchas
+
+- **Group behavior lives in `groups/<folder>/instructions.prepend.md` (persona, standing rules) and `groups/<folder>/memory/` (durable facts).** `CLAUDE.local.md` is gone as of the 2026-08-09 memory migration — don't go looking for it. `CLAUDE.md` in a group folder is generated at spawn; never edit it.
+- The composer **inlines** `instructions.prepend.md` into `.claude-fragments/persona.md`, so inside it `@./file.md` imports don't resolve and markdown links need absolute container paths (`/workspace/agent/memory/...`). Links *between* memory files stay relative.
+- **Private backup hook is `.husky/post-commit`**, not `.git/hooks/post-commit` — husky sets `core.hooksPath`, so hooks in `.git/hooks` are silently ignored (that's how the backup went a month stale). Confirm with `cd ~/.nanoclaw-private && git log -1` after committing.
+- Shared skills are at **`/app/skills/`** in the container. A local `/container/skills/` rename existed Jun–Aug 2026 and was reverted; don't reintroduce it.
 
 ## Adding a New Telegram Group (this installation)
 
