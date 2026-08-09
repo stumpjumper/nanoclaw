@@ -1,0 +1,7 @@
+# Back up private group files (instructions, memory, configs) to the
+# nanoclaw-private repo after every commit.
+#
+# This lives in .husky/ rather than .git/hooks/: husky sets core.hooksPath to
+# .husky/, so anything in .git/hooks is ignored. The original hook sat there and
+# silently stopped running — the backup went a month stale before anyone noticed.
+bash /Users/nano/.nanoclaw-private/sync.sh
