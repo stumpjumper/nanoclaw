@@ -18,6 +18,8 @@ import json
 import sys
 import urllib.request
 import urllib.error
+import http.client
+import time
 from xml.etree import ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
@@ -26,6 +28,7 @@ HEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 }
 FETCH_TIMEOUT = 20
+RETRY_DELAYS = [3, 8]  # seconds between attempts; len+1 = total attempts
 STATE_RETENTION_DAYS = 90
 
 
@@ -34,11 +37,43 @@ STATE_RETENTION_DAYS = 90
 def fetch_rss(url: str) -> list[dict]:
     """Return list of {title, url, pub_date} from an RSS/Atom feed."""
     req = urllib.request.Request(url, headers=HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
-            raw = resp.read()
-    except urllib.error.URLError as e:
-        print(f"[spacenews] RSS fetch failed for {url}: {e}", file=sys.stderr)
+
+    # Retry transient failures. A single 502 used to kill the whole run — the
+    # feed is fetched once per scheduled check, so one blip meant no articles
+    # until the next one hours later. 5xx and network/timeout errors are worth
+    # retrying (the upstream CDN or the credential proxy hiccuping); 4xx is a
+    # real answer about the request itself and is not retried.
+    raw = None
+    last_error = None
+    for attempt, delay in enumerate(RETRY_DELAYS + [None], start=1):
+        try:
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
+                raw = resp.read()
+            break
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code < 500:
+                print(f"[spacenews] RSS fetch failed for {url}: {e}", file=sys.stderr)
+                return []
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+            # URLError covers DNS/timeout; HTTPException covers RemoteDisconnected
+            # and friends, which urlopen does NOT wrap and which previously
+            # escaped as an uncaught traceback, killing the whole run; OSError
+            # covers raw socket resets.
+            last_error = e
+        if delay is None:
+            break
+        print(
+            f"[spacenews] fetch attempt {attempt} failed for {url} ({last_error}); retrying in {delay}s",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+
+    if raw is None:
+        print(
+            f"[spacenews] RSS fetch failed for {url} after {len(RETRY_DELAYS) + 1} attempts: {last_error}",
+            file=sys.stderr,
+        )
         return []
 
     try:
