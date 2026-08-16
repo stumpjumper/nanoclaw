@@ -212,6 +212,16 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 - The composer **inlines** `instructions.prepend.md` into `.claude-fragments/persona.md`, so inside it `@./file.md` imports don't resolve and markdown links need absolute container paths (`/workspace/agent/memory/...`). Links *between* memory files stay relative.
 - **Private backup hook is `.husky/post-commit`**, not `.git/hooks/post-commit` — husky sets `core.hooksPath`, so hooks in `.git/hooks` are silently ignored (that's how the backup went a month stale). Confirm with `cd ~/.nanoclaw-private && git log -1` after committing.
 - Shared skills are at **`/app/skills/`** in the container. A local `/container/skills/` rename existed Jun–Aug 2026 and was reverted; don't reintroduce it.
+- **Two different "global" files — don't confuse them.** `container/CLAUDE.md` is the shared *runtime* prompt every agent imports (that's where the "report failures in the same turn" rule lives). This file is guidance for *coding sessions*. Behavior you want every agent to have goes in the former; things a future Claude should know while editing goes here.
+- **Writing a task-driven group's send step:** say "call `send_message` with `to: <dest>`", never "send a message to the `<dest>` destination". The second phrasing echoes `<message to="…">` block syntax and steers the agent into writing a block, which is inert in a task run — it lands in the run log, earns a corrective nudge, and only then sends. Space News did exactly this. Most groups need no send wording at all; the runtime prompt already covers it.
+
+### Quick health checks
+
+```bash
+ncl tasks list                                   # RUNS/FAILED per series
+grep -c 'not delivered — task sessions' logs/nanoclaw.log logs/nanoclaw.error.log   # inert-block nudges
+find data/v2-sessions/*/.claude-shared/skills -type l ! -lname '/app/skills/*'      # stale skill symlinks
+```
 
 ## Adding a New Telegram Group (this installation)
 
