@@ -420,8 +420,18 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
     } catch {
       /* missing */
     }
+    const target = `/app/skills/${skill}`;
     if (!entry) {
-      fs.symlinkSync(`/app/skills/${skill}`, linkPath);
+      fs.symlinkSync(target, linkPath);
+    } else if (entry.isSymbolicLink() && fs.readlinkSync(linkPath) !== target) {
+      // Re-point a symlink whose target has moved. Targets are container paths,
+      // so a stale one is dangling *inside* the container while looking fine on
+      // the host — the skill simply isn't there, and the agent reports the
+      // script as missing. Reconciling only presence (create missing, drop
+      // unwanted) left these untouched and silently broken.
+      fs.unlinkSync(linkPath);
+      fs.symlinkSync(target, linkPath);
+      log.info('Re-pointed shared skill symlink to current target', { skill, target });
     } else if (!entry.isSymbolicLink()) {
       // A real entry here is either a template overlay (intentional; see
       // src/group-skills.ts) or a stale pre-refactor skill copy that shadows
