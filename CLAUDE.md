@@ -217,8 +217,14 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 
 ### Quick health checks
 
+Where things are written down: **this file** = durable project rules; **`ROADMAP.md`** =
+shared product direction and the upstream PR queue; **`TODO.md`** = machine-local chores
+(git-ignored, never commit it).
+
 ```bash
-ncl tasks list                                   # RUNS/FAILED per series
+ncl tasks list                                   # RUNS/FAILED per series (read it; don't awk a
+                                                 # fixed column — prompts contain spaces and shift
+                                                 # them. Use --json for scripting.)
 grep -c 'not delivered — task sessions' logs/nanoclaw.log logs/nanoclaw.error.log   # inert-block nudges
 find data/v2-sessions/*/.claude-shared/skills -type l ! -lname '/app/skills/*'      # stale skill symlinks
 ```

@@ -50,3 +50,6 @@ forks.md
 # Runtime artifacts
 nanoclaw.db
 claude_restart_command
+
+# Machine-local scratchpad — never commit (see ROADMAP.md for shared items)
+TODO.md
