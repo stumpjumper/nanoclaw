@@ -53,3 +53,6 @@ claude_restart_command
 
 # Machine-local scratchpad — never commit (see ROADMAP.md for shared items)
 TODO.md
+
+# Python bytecode from running container skills locally
+__pycache__/

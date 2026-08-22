@@ -4,7 +4,7 @@ Product direction and open work for this fork. Machine-local chores live in `TOD
 (git-ignored); incident history and root-cause narrative live in the agent memory tree
 at `~/.claude/projects/-Users-nano-projects-nanoclaw/memory/`.
 
-Last reviewed: 2026-08-16.
+Last reviewed: 2026-08-22.
 
 ---
 
@@ -21,7 +21,8 @@ feature PR) was closed with no discussion, which is the precedent to expect.
 | # | What | Opened | Status |
 |---|---|---|---|
 | [#3280](https://github.com/nanocoai/nanoclaw/pull/3280) | `ncl groups config update` can set a nullable scalar but never clear it (`--model ""` stored the empty string, which reached the runtime) | 2026-08-16 | Open. Bug fix + 3 regression tests verified to fail without it. Best odds of the set. |
-| [#3216](https://github.com/nanocoai/nanoclaw/pull/3216) | Document that `install_packages` covers apt and npm only | 2026-08-16 | Open. Docs only. |
+| [#3279](https://github.com/nanocoai/nanoclaw/pull/3279) | `syncSkillSymlinks` never re-points a symlink whose target moved, leaving it dangling inside the container while the host looks fine | 2026-08-16 | Open. Bug fix. Found via the agent's own failure report after our `/container/skills` → `/app/skills` revert stranded 66 links. |
+| [#3216](https://github.com/nanocoai/nanoclaw/pull/3216) | Document that `install_packages` covers apt and npm only | 2026-08-16 | **Merged 2026-08-22.** First contribution of ours to land. Arrives here on the next `/update-nanoclaw`. |
 | [#3217](https://github.com/nanocoai/nanoclaw/issues/3217) | Issue: no pip channel in `install_packages`, which blocks hardened-image adoption for Python-dependent installs | 2026-08-16 | Open. Filed as an issue, not a PR, because the fix is a capability. Offers three directions; we implement whichever maintainers pick. |
 | [#2956](https://github.com/nanocoai/nanoclaw/pull/2956) | Suppress duplicate delivery when final output repeats tool-sent content | 2026-07-04 | Open, unreviewed. |
 | [#2910](https://github.com/nanocoai/nanoclaw/pull/2910) | Forbid repeating `send_message` content in the final `<message>` block | 2026-07-02 | Open. A contributor confirmed they reproduce the same duplicate. Complements #2956. |

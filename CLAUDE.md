@@ -229,6 +229,12 @@ grep -c 'not delivered — task sessions' logs/nanoclaw.log logs/nanoclaw.error.
 find data/v2-sessions/*/.claude-shared/skills -type l ! -lname '/app/skills/*'      # stale skill symlinks
 ```
 
+Reading `logs/nanoclaw.error.log`: a steady trickle of `Bad Gateway (status 502)` on
+`[chat-sdk:telegram]` lines is **Telegram's own API flaking on `getUpdates`** — it retries with
+backoff and recovers, and deliveries are unaffected. Filter it out (`grep -v chat-sdk:telegram`)
+before concluding anything from a `502` grep. A 502 an *agent* reports for a feed it fetched is a
+different thing and is worth investigating.
+
 ## Adding a New Telegram Group (this installation)
 
 **Use `/manage-channels`. Do not attempt this manually.**
