@@ -210,6 +210,15 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 
 - **Group behavior lives in `groups/<folder>/instructions.prepend.md` (persona, standing rules) and `groups/<folder>/memory/` (durable facts).** `CLAUDE.local.md` is gone as of the 2026-08-09 memory migration — don't go looking for it. `CLAUDE.md` in a group folder is generated at spawn; never edit it.
 - The composer **inlines** `instructions.prepend.md` into `.claude-fragments/persona.md`, so inside it `@./file.md` imports don't resolve and markdown links need absolute container paths (`/workspace/agent/memory/...`). Links *between* memory files stay relative.
+- **Every scheduled task runs in its own isolated session** (`system:tasks:<seriesId>`), not in
+  the group's chat session — migrated 2026-08-23 by `scripts/migrate-task-sessions.ts`. Two
+  consequences that bite: a task run **cannot read the group chat**, and the chat agent
+  **cannot see what a task sent** (it reads `groups/<folder>/tasks/<series>.md` instead).
+  Anything the chat and a job both rely on — a counter, a correction, a standing rule — must be
+  written to a file in the group workspace; the transcript is not a channel between them.
+  Exercise (`apple_watch_challenge.md`) and Spudtronomy (`memory/reference/corrections.md`)
+  carry explicit "write it down, then re-read to confirm the write landed" rules because both
+  silently lost state this way.
 - **Private backup hook is `.husky/post-commit`**, not `.git/hooks/post-commit` — husky sets `core.hooksPath`, so hooks in `.git/hooks` are silently ignored (that's how the backup went a month stale). Confirm with `cd ~/.nanoclaw-private && git log -1` after committing.
 - Shared skills are at **`/app/skills/`** in the container. A local `/container/skills/` rename existed Jun–Aug 2026 and was reverted; don't reintroduce it.
 - **Two different "global" files — don't confuse them.** `container/CLAUDE.md` is the shared *runtime* prompt every agent imports (that's where the "report failures in the same turn" rule lives). This file is guidance for *coding sessions*. Behavior you want every agent to have goes in the former; things a future Claude should know while editing goes here.
@@ -227,7 +236,18 @@ ncl tasks list                                   # RUNS/FAILED per series (read 
                                                  # them. Use --json for scripting.)
 grep -c 'not delivered — task sessions' logs/nanoclaw.log logs/nanoclaw.error.log   # inert-block nudges
 find data/v2-sessions/*/.claude-shared/skills -type l ! -lname '/app/skills/*'      # stale skill symlinks
+
+# cron collisions — any hour:minute claimed by two series (empty output = none)
+ncl tasks list --json | jq -r '.data[]|(.schedule|split(" "))as $f|$f[1]|split(",")[]|"\(.):\($f[0])"' \
+  | sort | uniq -d
 ```
+
+**Before creating or rescheduling a task, run that collision check and pick a free minute.**
+Every series fires in its own container; simultaneous fires spike a 4 CPU / 4 GB Docker
+allocation. Push back if the requested time is already taken and offer the nearest free slot.
+Note a single cron with an hour list (`0 4,16 * * *`) fires twice at the *same* minute — if two
+fire times need different minutes, that is two series, not one (this is why `ncl tasks create
+--name` exists: readable ids like `gmail-triage-evening-2713` beat `task-<epoch>-<hex>`).
 
 Reading `logs/nanoclaw.error.log`: a steady trickle of `Bad Gateway (status 502)` on
 `[chat-sdk:telegram]` lines is **Telegram's own API flaking on `getUpdates`** — it retries with
