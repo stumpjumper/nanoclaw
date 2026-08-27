@@ -4,7 +4,7 @@ Product direction and open work for this fork. Machine-local chores live in `TOD
 (git-ignored); incident history and root-cause narrative live in the agent memory tree
 at `~/.claude/projects/-Users-nano-projects-nanoclaw/memory/`.
 
-Last reviewed: 2026-08-22.
+Last reviewed: 2026-08-26.
 
 ---
 
@@ -36,7 +36,25 @@ Not yet opened:
   owned by `node` so `claw` works without a host mount; pass secrets to `scripts/claw` as
   `-e` env vars rather than a JSON payload. Include only these commits, no fork customizations.
 
+## Open investigations
+
+- **`attempt to write a readonly database` in the delivery poll.** ~50 occurrences from
+  `getDueOutboundMessages` (`src/db/session-db.ts`) via `drainSession`. Clusters around task
+  activity, predates the 2026-08-23 task-session migration (also fired at 04:00/04:15/04:31
+  that morning), deliveries succeed regardless, and none since that evening. File permissions
+  are fine (`nano`-owned, `rw-`). Unexplained — could be an upstream bug worth a PR once
+  characterized. Reproduce by watching the morning block.
+
 ## Scheduled revisits
+
+- **Per-run context boundary for scheduled tasks.** The original motivation for the
+  2026-08-23 work: emulate a `/handoff` boundary so cron jobs start fresh each run instead of
+  resuming an ever-growing transcript, to cut Opus token cost. Deferred, and the tentative
+  answer is *no* — per-series isolation appears to have addressed the real problem, which was
+  state living in a transcript rather than in a file. Decide with a week of actual token data
+  under the new layout, not on theory. If revisited, the design is: fresh context per run +
+  a `tasks/<series>.handoff.md` the run writes and the next run loads.
+
 
 - **Per-group model choice** — revisit every few months and whenever a new tier ships.
   Four groups run `opus`, four run the Sonnet default (see `CLAUDE.md` and
@@ -50,9 +68,6 @@ Not yet opened:
 
 ## Group tuning
 
-- **YouTube — verbose off when stable.** `verbose: true` in `youtube-channels.json`; flip to
-  `false` once RSS checks have been reliable for a stretch. RSS was confirmed healthy
-  2026-08-16 after the skill-symlink fix, so this is close.
 - **YouTube — search thresholds.** Tune `min_views` / `min_like_ratio` / `min_subscribers`
   per search in `youtube-searches.json` based on signal-to-noise. Joe Justice deliberately
   runs lower (`min_subscribers` 3K) to catch indie shows.
