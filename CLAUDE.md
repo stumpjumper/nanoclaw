@@ -235,6 +235,7 @@ ncl tasks list                                   # RUNS/FAILED per series (read 
                                                  # fixed column — prompts contain spaces and shift
                                                  # them. Use --json for scripting.)
 grep -c 'not delivered — task sessions' logs/nanoclaw.log logs/nanoclaw.error.log   # inert-block nudges
+grep -c MissingChannelAdapterError logs/nanoclaw.error.log                          # channel adapter dead
 find data/v2-sessions/*/.claude-shared/skills -type l ! -lname '/app/skills/*'      # stale skill symlinks
 
 # cron collisions — any hour:minute claimed by two series (empty output = none)
@@ -248,6 +249,31 @@ allocation. Push back if the requested time is already taken and offer the neare
 Note a single cron with an hour list (`0 4,16 * * *`) fires twice at the *same* minute — if two
 fire times need different minutes, that is two series, not one (this is why `ncl tasks create
 --name` exists: readable ids like `gmail-triage-evening-2713` beat `task-<epoch>-<hex>`).
+
+**A cold start is when a stale `dist/` bites.** The host runs from `dist/`, and a running
+process keeps the modules it loaded at spawn — so a bad build sits latent until the next
+restart, which is usually an unattended reboot. This is exactly how Telegram delivery died
+2026-08-27: `dist/channels/index.js` had been rebuilt on 2026-08-16 without
+`import './telegram.js'`, the live process had loaded the good build 45 minutes earlier, and
+nothing broke until a reboot forced a cold start ten days later. The adapter was never in the
+registry, so it never reached the "credentials missing" or "Failed to start channel adapter"
+log branches — **the only symptoms were `MissingChannelAdapterError` on every outbound message
+and a startup line reading `adapters=["cli"]`.** After any reboot or restart, check that
+startup line names every channel you expect; if delivery is silently dead, run `pnpm run build`
+and compare `dist/channels/index.js` against `src/channels/index.ts` before looking anywhere
+else. Messages that exhaust their 3 retries are logged "giving up" and are **gone** — 29 were
+lost in that outage.
+
+That same bad build had a **second casualty, with a completely different symptom**:
+`materializeContainerJson` dropped the `env` block, so `groups/<folder>/container.json` was
+written without it and per-group env vars never reached any container — all eight groups lost
+`REQUESTS_CA_BUNDLE`, and YouTube additionally lost `YOUTUBE_API_KEY` and `NO_PROXY`. YouTube read as
+`YOUTUBE_API_KEY not set` for two days while `ncl groups config get` showed the key present in
+the DB — the DB row and the materialized file disagreed. **When a container can't see an env
+var the config claims it has, diff `groups/<folder>/container.json` against
+`ncl groups config get --id <group>` before suspecting OneCLI or the proxy.** The lesson for
+both: one bad build breaks unrelated subsystems in ways that don't look related, so after any
+mystery whose trail goes cold, check `dist/` freshness first.
 
 Reading `logs/nanoclaw.error.log`: a steady trickle of `Bad Gateway (status 502)` on
 `[chat-sdk:telegram]` lines is **Telegram's own API flaking on `getUpdates`** — it retries with
