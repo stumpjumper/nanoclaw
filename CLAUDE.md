@@ -218,7 +218,17 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
   written to a file in the group workspace; the transcript is not a channel between them.
   Exercise (`apple_watch_challenge.md`) and Spudtronomy (`memory/reference/corrections.md`)
   carry explicit "write it down, then re-read to confirm the write landed" rules because both
-  silently lost state this way.
+  silently lost state this way. **"Re-read to confirm" is not sufficient on its own** — it
+  re-reads whatever path was just written, so a wrong path verifies clean. `/workspace` is the
+  session dir, mounted RW, so a write to a wrong path under it (`/workspace/group/...` instead
+  of `/workspace/agent/...`) does not fail: it creates a private scratch file no task can see,
+  discarded with the session. Exercise lost May–Aug 2026 and then Sept 1 to exactly this, the
+  second time because the 2026-08-24 path correction was applied to
+  `memory/reference/challenge-file.md` but missed `memory/index.md`. The check that actually
+  works: **a state file always already exists — if a write would create one, the path is
+  wrong.** When correcting a path in group memory, `grep -rn` the whole group folder; these
+  pointers are duplicated across `memory/index.md`, `memory/reference/*`, and
+  `instructions.prepend.md`.
 - **Private backup hook is `.husky/post-commit`**, not `.git/hooks/post-commit` — husky sets `core.hooksPath`, so hooks in `.git/hooks` are silently ignored (that's how the backup went a month stale). Confirm with `cd ~/.nanoclaw-private && git log -1` after committing.
 - Shared skills are at **`/app/skills/`** in the container. A local `/container/skills/` rename existed Jun–Aug 2026 and was reverted; don't reintroduce it.
 - **Two different "global" files — don't confuse them.** `container/CLAUDE.md` is the shared *runtime* prompt every agent imports (that's where the "report failures in the same turn" rule lives). This file is guidance for *coding sessions*. Behavior you want every agent to have goes in the former; things a future Claude should know while editing goes here.
