@@ -4,7 +4,7 @@ Product direction and open work for this fork. Machine-local chores live in `TOD
 (git-ignored); incident history and root-cause narrative live in the agent memory tree
 at `~/.claude/projects/-Users-nano-projects-nanoclaw/memory/`.
 
-Last reviewed: 2026-08-26.
+Last reviewed: 2026-09-13.
 
 ---
 
@@ -36,14 +36,27 @@ Not yet opened:
   owned by `node` so `claw` works without a host mount; pass secrets to `scripts/claw` as
   `-e` env vars rather than a JSON payload. Include only these commits, no fork customizations.
 
+- **Log the active channel adapters at startup.** Candidate, needs a judgment call on whether
+  it reads as a bug fix or a feature. `initChannelAdapters` logs a line per adapter it *tries*
+  to start, and warns on missing credentials or a failed setup — but a channel that never
+  registered at all (its self-registration import missing from the `src/channels/index.js`
+  barrel) produces **no output whatsoever**. Delivery then fails per-message with
+  `MissingChannelAdapterError` and nothing points at the cause. That cost this install two days
+  of dead Telegram delivery on 2026-08-27. A single startup line naming the active adapters —
+  the webhook server already does this for its subset (`adapters=["telegram"]`) — would have
+  made it immediate. Small, no behavior change, arguably a robustness fix rather than a
+  capability; frame it that way given the `CONTRIBUTING.md` constraint above.
+
 ## Open investigations
 
-- **`attempt to write a readonly database` in the delivery poll.** ~50 occurrences from
+- **`attempt to write a readonly database` in the delivery poll.** 52 occurrences as of
+  2026-08-28 (was ~50 on 08-26 — essentially dormant, not climbing) from
   `getDueOutboundMessages` (`src/db/session-db.ts`) via `drainSession`. Clusters around task
   activity, predates the 2026-08-23 task-session migration (also fired at 04:00/04:15/04:31
-  that morning), deliveries succeed regardless, and none since that evening. File permissions
-  are fine (`nano`-owned, `rw-`). Unexplained — could be an upstream bug worth a PR once
-  characterized. Reproduce by watching the morning block.
+  that morning), deliveries succeed regardless. File permissions are fine (`nano`-owned,
+  `rw-`). Unexplained — could be an upstream bug worth a PR once characterized. Reproduce by
+  watching the morning block. Given how slowly it accrues, this needs a deliberate capture
+  session rather than opportunistic checking.
 
 ## Scheduled revisits
 

@@ -222,13 +222,13 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
   re-reads whatever path was just written, so a wrong path verifies clean. `/workspace` is the
   session dir, mounted RW, so a write to a wrong path under it (`/workspace/group/...` instead
   of `/workspace/agent/...`) does not fail: it creates a private scratch file no task can see,
-  discarded with the session. Exercise lost May–Aug 2026 and then Sept 1 to exactly this, the
-  second time because the 2026-08-24 path correction was applied to
-  `memory/reference/challenge-file.md` but missed `memory/index.md`. The check that actually
-  works: **a state file always already exists — if a write would create one, the path is
-  wrong.** When correcting a path in group memory, `grep -rn` the whole group folder; these
-  pointers are duplicated across `memory/index.md`, `memory/reference/*`, and
-  `instructions.prepend.md`.
+  discarded with the session. The check that actually works: **a state file always already
+  exists — if a write would create one, the path is wrong.** When correcting a path in group
+  memory, `grep -rn` the whole group folder; these pointers are duplicated across
+  `memory/index.md`, `memory/reference/*`, and `instructions.prepend.md`, and a correction that
+  misses one of them silently persists (that is how Exercise lost Sept 1 2026 after the same
+  bug had already cost May–Aug). Full narrative:
+  `memory/project_workspace_group_wrong_path.md`.
 - **Private backup hook is `.husky/post-commit`**, not `.git/hooks/post-commit` — husky sets `core.hooksPath`, so hooks in `.git/hooks` are silently ignored (that's how the backup went a month stale). Confirm with `cd ~/.nanoclaw-private && git log -1` after committing.
 - Shared skills are at **`/app/skills/`** in the container. A local `/container/skills/` rename existed Jun–Aug 2026 and was reverted; don't reintroduce it.
 - **Two different "global" files — don't confuse them.** `container/CLAUDE.md` is the shared *runtime* prompt every agent imports (that's where the "report failures in the same turn" rule lives). This file is guidance for *coding sessions*. Behavior you want every agent to have goes in the former; things a future Claude should know while editing goes here.
@@ -261,29 +261,21 @@ fire times need different minutes, that is two series, not one (this is why `ncl
 --name` exists: readable ids like `gmail-triage-evening-2713` beat `task-<epoch>-<hex>`).
 
 **A cold start is when a stale `dist/` bites.** The host runs from `dist/`, and a running
-process keeps the modules it loaded at spawn — so a bad build sits latent until the next
-restart, which is usually an unattended reboot. This is exactly how Telegram delivery died
-2026-08-27: `dist/channels/index.js` had been rebuilt on 2026-08-16 without
-`import './telegram.js'`, the live process had loaded the good build 45 minutes earlier, and
-nothing broke until a reboot forced a cold start ten days later. The adapter was never in the
-registry, so it never reached the "credentials missing" or "Failed to start channel adapter"
-log branches — **the only symptoms were `MissingChannelAdapterError` on every outbound message
-and a startup line reading `adapters=["cli"]`.** After any reboot or restart, check that
-startup line names every channel you expect; if delivery is silently dead, run `pnpm run build`
-and compare `dist/channels/index.js` against `src/channels/index.ts` before looking anywhere
-else. Messages that exhaust their 3 retries are logged "giving up" and are **gone** — 29 were
-lost in that outage.
+process keeps the modules it loaded at spawn — so a bad build stays latent until the next
+restart, usually an unattended reboot days later. One bad build breaks unrelated subsystems in
+ways that don't look related, so **after any mystery whose trail goes cold, check `dist/`
+freshness first**: `pnpm run build`, then diff `dist/` against `src/`. Two symptoms seen from a
+single bad build (2026-08-16, surfaced on the 08-27 reboot; details in
+`memory/project_stale_dist_outage_2026-08-27.md`):
 
-That same bad build had a **second casualty, with a completely different symptom**:
-`materializeContainerJson` dropped the `env` block, so `groups/<folder>/container.json` was
-written without it and per-group env vars never reached any container — all eight groups lost
-`REQUESTS_CA_BUNDLE`, and YouTube additionally lost `YOUTUBE_API_KEY` and `NO_PROXY`. YouTube read as
-`YOUTUBE_API_KEY not set` for two days while `ncl groups config get` showed the key present in
-the DB — the DB row and the materialized file disagreed. **When a container can't see an env
-var the config claims it has, diff `groups/<folder>/container.json` against
-`ncl groups config get --id <group>` before suspecting OneCLI or the proxy.** The lesson for
-both: one bad build breaks unrelated subsystems in ways that don't look related, so after any
-mystery whose trail goes cold, check `dist/` freshness first.
+- **A channel that never registered logs nothing at all** — not "credentials missing", not
+  "Failed to start channel adapter". The only tells are `MissingChannelAdapterError` per
+  outbound message and a startup line reading `adapters=["cli"]`. After any restart, check that
+  line names every channel you expect. Messages that exhaust their 3 retries log "giving up"
+  and are **gone**.
+- **A container can't see an env var its config claims it has.** Diff
+  `groups/<folder>/container.json` against `ncl groups config get --id <group>` before
+  suspecting OneCLI or the proxy — the DB row and the materialized file can disagree.
 
 Reading `logs/nanoclaw.error.log`: a steady trickle of `Bad Gateway (status 502)` on
 `[chat-sdk:telegram]` lines is **Telegram's own API flaking on `getUpdates`** — it retries with
