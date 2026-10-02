@@ -68,7 +68,8 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     youtube-transcript-api \
     requests \
     yt-dlp \
-    tzdata
+    tzdata \
+    ephem
 
 # Chromium path for agent-browser / Playwright consumers
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium

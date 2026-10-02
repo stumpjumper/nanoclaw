@@ -1,151 +1,233 @@
 #!/usr/bin/env python3
 """
 sun-moon.py — Sun, moon, and civil twilight data for NanoClaw weather reports.
-Uses free USNO and Open-Meteo APIs. No API key required.
+
+Everything is computed locally with ephem (libastro). These are deterministic
+astronomy, not observations, so there is no almanac API to go down: the USNO
+service this used to call was unreachable for days at a time.
+
+Coordinates run fully offline. A place name or ZIP is geocoded through
+Open-Meteo first — the only step that touches the network.
 
 Usage:
-  python3 sun-moon.py "Albuquerque"
+  python3 sun-moon.py "35.046583,-106.483972"                  # offline
+  python3 sun-moon.py "35.046583,-106.483972" --tz America/Denver
+  python3 sun-moon.py "Denver"                                 # geocoded
   python3 sun-moon.py "87123"
-  python3 sun-moon.py  # prompts for input
+  python3 sun-moon.py "87123" --date 2026-12-25
+  python3 sun-moon.py                                          # prompts
 """
 
+from __future__ import annotations
+
+import argparse
+import os
 import sys
-import requests
-from datetime import datetime, date
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import ephem
 
-def get_location(query: str) -> dict:
+# Upper limb of the disk at the horizon, including standard refraction. The
+# refraction model is switched off (pressure = 0) so the horizon value alone
+# defines the event, which is the conventional rise/set definition.
+HORIZON_RISE_SET = "-0:34"
+HORIZON_CIVIL = "-6"
+
+# The four quarter events, each paired with the name of the segment that
+# follows it. Naming from the real events rather than a fraction of the
+# lunation matters: the quarters are not evenly spaced in time.
+QUARTERS = [
+    (ephem.previous_new_moon, "New Moon", "Waxing Crescent"),
+    (ephem.previous_first_quarter_moon, "First Quarter", "Waxing Gibbous"),
+    (ephem.previous_full_moon, "Full Moon", "Waning Gibbous"),
+    (ephem.previous_last_quarter_moon, "Last Quarter", "Waning Crescent"),
+]
+
+# Call it by the event name within half a day either side of the exact moment.
+EXACT_PHASE_WINDOW_DAYS = 0.5
+
+
+def parse_coords(query: str) -> dict | None:
+    """Parse a 'lat,lon' string. Returns None if it isn't one."""
+    parts = [p.strip() for p in query.split(",")]
+    if len(parts) != 2:
+        return None
+    try:
+        lat, lon = float(parts[0]), float(parts[1])
+    except ValueError:
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError(f"Coordinates out of range: {query}")
+    return {"lat": lat, "lon": lon, "timezone": None, "name": f"{lat:.4f}, {lon:.4f}"}
+
+
+def geocode(query: str) -> dict:
     """Geocode a city name or US ZIP code via Open-Meteo (free, no key)."""
+    import requests  # imported lazily so coordinate lookups need no network stack
+
     url = "https://geocoding-api.open-meteo.com/v1/search"
-    resp = requests.get(url, params={"name": query, "count": 1, "language": "en", "format": "json"}, timeout=10)
+    resp = requests.get(
+        url, params={"name": query, "count": 1, "language": "en", "format": "json"}, timeout=10
+    )
     resp.raise_for_status()
-    data = resp.json()
-    if not data.get("results"):
-        raise ValueError(f"Location not found for '{query}'.")
-    loc = data["results"][0]
+    results = resp.json().get("results")
+    if not results:
+        raise ValueError(
+            f"Location not found for '{query}'. Pass 'lat,lon' instead to skip geocoding."
+        )
+    loc = results[0]
     return {
         "lat": loc["latitude"],
         "lon": loc["longitude"],
-        "timezone": loc["timezone"],
+        "timezone": loc.get("timezone"),
         "name": f"{loc.get('name', query)}, {loc.get('admin1', '')} {loc.get('country_code', '')}".strip(),
     }
 
 
-def get_utc_offset_hours(timezone: str, target_date: date) -> float:
-    """Return UTC offset in decimal hours for the given timezone on the given date (handles DST)."""
-    dt = datetime(target_date.year, target_date.month, target_date.day, 12, 0, 0)
-    local_dt = dt.replace(tzinfo=ZoneInfo(timezone))
-    offset = local_dt.utcoffset()
-    return (offset.total_seconds() / 3600) if offset else 0.0
+def get_location(query: str) -> dict:
+    return parse_coords(query) or geocode(query)
 
 
-def get_usno_daily(lat: float, lon: float, tz_hours: float, date_str: str) -> dict:
-    """Fetch sunrise, sunset, civil twilight, and moon data from USNO OneDay API."""
-    url = "https://aa.usno.navy.mil/api/rstt/oneday"
-    resp = requests.get(url, params={"date": date_str, "coords": f"{lat},{lon}", "tz": tz_hours}, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def get_moon_phases(date_str: str, nump: int = 12) -> dict:
-    """Fetch upcoming primary moon phases from USNO."""
-    url = "https://aa.usno.navy.mil/api/moon/phases/date"
-    resp = requests.get(url, params={"date": date_str, "nump": nump}, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def parse_phenomena(phen_list: list) -> dict:
-    """Convert a USNO phenomenon list into {name: time} dict."""
-    return {item.get("phen", ""): item.get("time") for item in phen_list}
-
-
-def parse_daily_data(json_data: dict) -> dict:
-    """Extract sun/moon fields from USNO OneDay response (handles both response formats)."""
-    if "properties" in json_data and "data" in json_data["properties"]:
-        data = json_data["properties"]["data"]
-    else:
-        data = json_data.get("data", json_data)
-
-    sun = parse_phenomena(data.get("sundata", []))
-    moon = parse_phenomena(data.get("moondata", []))
-
-    return {
-        "civil_twilight_morning": sun.get("Begin Civil Twilight"),
-        "sunrise": sun.get("Rise"),
-        "sunset": sun.get("Set"),
-        "civil_twilight_evening": sun.get("End Civil Twilight"),
-        "moonrise": moon.get("Rise"),
-        "moonset": moon.get("Set"),
-        "illumination": data.get("fracillum"),
-        "current_phase": data.get("curphase") or data.get("closestphase", {}).get("phase", "N/A"),
-    }
-
-
-def find_next_phases(phases_json: dict, today: date) -> tuple:
-    """Return (next_new_moon, next_full_moon) as (date, time, days_away) tuples."""
-    next_new = None
-    next_full = None
-    for p in phases_json.get("phasedata", []):
-        try:
-            p_date = date(p["year"], p["month"], p["day"])
-        except (KeyError, ValueError):
+def resolve_tz(explicit: str | None, from_location: str | None) -> tuple:
+    """Pick a timezone: --tz, then the geocoded zone, then the container's TZ."""
+    for name in (explicit, from_location, os.environ.get("TZ")):
+        if not name:
             continue
-        if p_date >= today:
-            phase = p.get("phase", "")
-            entry = (p_date, p.get("time", "00:00"), (p_date - today).days)
-            if phase == "New Moon" and not next_new:
-                next_new = entry
-            elif phase == "Full Moon" and not next_full:
-                next_full = entry
-        if next_new and next_full:
-            break
-    return next_new, next_full
+        try:
+            return ZoneInfo(name), name
+        except Exception:
+            if name is explicit:
+                raise ValueError(f"Unknown timezone: {name}")
+    local = datetime.now().astimezone().tzinfo
+    return local, str(local)
 
 
-def main():
-    if len(sys.argv) > 1:
-        query = sys.argv[1].strip()
-    else:
-        query = input("Enter city name or US ZIP code: ").strip()
+def observer(lat: float, lon: float, when_utc: datetime, horizon: str) -> ephem.Observer:
+    obs = ephem.Observer()
+    obs.lat, obs.lon = str(lat), str(lon)
+    obs.pressure = 0  # horizon constants above already account for refraction
+    obs.horizon = horizon
+    obs.date = ephem.Date(when_utc)
+    return obs
 
-    today = date.today()
-    date_str = today.strftime("%Y-%m-%d")
 
-    print(f"\nFetching data for '{query}' on {date_str}...\n")
+def find_event(
+    lat: float,
+    lon: float,
+    body,
+    kind: str,
+    start_utc: datetime,
+    end_utc: datetime,
+    horizon: str,
+    use_center: bool,
+) -> datetime | None:
+    """First rise/set after start_utc, or None if it falls outside the day."""
+    obs = observer(lat, lon, start_utc, horizon)
+    seek = obs.next_rising if kind == "rise" else obs.next_setting
+    try:
+        when = seek(body, use_center=use_center).datetime()
+    except (ephem.AlwaysUpError, ephem.NeverUpError):
+        return None
+    return when if when < end_utc else None
 
-    loc = get_location(query)
-    print(f"📍 {loc['name']}")
-    print(f"   Coordinates: {loc['lat']:.4f}, {loc['lon']:.4f}")
 
-    tz_hours = get_utc_offset_hours(loc["timezone"], today)
-    print(f"   UTC offset: {tz_hours:+.1f} hours ({loc['timezone']})\n")
+def to_local(when_utc: datetime | None, tz) -> str:
+    if when_utc is None:
+        return "—"
+    local = when_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+    return (local + timedelta(seconds=30)).strftime("%H:%M")
 
-    daily = parse_daily_data(get_usno_daily(loc["lat"], loc["lon"], tz_hours, date_str))
 
-    print("🌅 Sun & Civil Twilight")
-    print(f"   Morning civil twilight: {daily['civil_twilight_morning'] or 'N/A'}")
-    print(f"   Sunrise:                {daily['sunrise'] or 'N/A'}")
-    print(f"   Sunset:                 {daily['sunset'] or 'N/A'}")
-    print(f"   Evening civil twilight: {daily['civil_twilight_evening'] or 'N/A'}")
+def moon_phase_name(when_utc: datetime) -> str:
+    """Name the phase from the most recent quarter event."""
+    d = ephem.Date(when_utc)
+    when, exact, segment = max(
+        ((finder(d), exact, segment) for finder, exact, segment in QUARTERS),
+        key=lambda q: q[0],
+    )
+    return exact if (d - when) < EXACT_PHASE_WINDOW_DAYS else segment
+
+
+def next_phase(finder, when_utc: datetime, tz, today: date) -> tuple:
+    moment = finder(ephem.Date(when_utc)).datetime().replace(tzinfo=timezone.utc).astimezone(tz)
+    return moment, (moment.date() - today).days
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Sun, moon, and civil twilight times, computed locally."
+    )
+    parser.add_argument("location", nargs="?", help="'lat,lon', a city name, or a US ZIP code")
+    parser.add_argument("--tz", help="IANA timezone, e.g. America/Denver (overrides the default)")
+    parser.add_argument("--date", help="Target date as YYYY-MM-DD (default: today)")
+    args = parser.parse_args()
+
+    query = args.location or input("Enter 'lat,lon', a city name, or a US ZIP code: ").strip()
+    if not query:
+        print("No location given.", file=sys.stderr)
+        return 1
+
+    try:
+        target = date.fromisoformat(args.date) if args.date else date.today()
+    except ValueError:
+        print(f"Bad --date '{args.date}' — expected YYYY-MM-DD.", file=sys.stderr)
+        return 1
+
+    try:
+        loc = get_location(query)
+        tz, tz_name = resolve_tz(args.tz, loc["timezone"])
+    except Exception as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+
+    lat, lon = loc["lat"], loc["lon"]
+    start_local = datetime.combine(target, time(0, 0), tzinfo=tz)
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = (start_local + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
+    noon_utc = (start_local + timedelta(hours=12)).astimezone(timezone.utc).replace(tzinfo=None)
+
+    def sun_event(kind, horizon, use_center):
+        return find_event(
+            lat, lon, ephem.Sun(), kind, start_utc, end_utc, horizon, use_center
+        )
+
+    def moon_event(kind):
+        return find_event(
+            lat, lon, ephem.Moon(), kind, start_utc, end_utc, HORIZON_RISE_SET, False
+        )
+
+    moon = ephem.Moon()
+    moon.compute(observer(lat, lon, noon_utc, HORIZON_RISE_SET))
+
+    print(f"\n📍 {loc['name']}  —  {target.isoformat()}")
+    print(f"   Coordinates: {lat:.4f}, {lon:.4f}   Timezone: {tz_name}")
+
+    print("\n🌅 Sun & Civil Twilight")
+    print(f"   Morning civil twilight: {to_local(sun_event('rise', HORIZON_CIVIL, True), tz)}")
+    print(f"   Sunrise:                {to_local(sun_event('rise', HORIZON_RISE_SET, False), tz)}")
+    print(f"   Sunset:                 {to_local(sun_event('set', HORIZON_RISE_SET, False), tz)}")
+    print(f"   Evening civil twilight: {to_local(sun_event('set', HORIZON_CIVIL, True), tz)}")
 
     print("\n🌕 Moon")
-    print(f"   Moonrise:      {daily['moonrise'] or 'N/A'}")
-    print(f"   Moonset:       {daily['moonset'] or 'N/A'}")
-    print(f"   Illumination:  {daily['illumination'] or 'N/A'}")
-    print(f"   Current phase: {daily['current_phase']}")
-
-    next_new, next_full = find_next_phases(get_moon_phases(date_str), today)
+    print(f"   Moonrise:      {to_local(moon_event('rise'), tz)}")
+    print(f"   Moonset:       {to_local(moon_event('set'), tz)}")
+    print(f"   Illumination:  {moon.phase:.0f}%")
+    print(f"   Current phase: {moon_phase_name(noon_utc)}")
 
     print("\n🔄 Upcoming Moon Phases")
-    if next_new:
-        print(f"   Next New Moon:  {next_new[0]} at {next_new[1]} UTC  ({next_new[2]} days away)")
-    if next_full:
-        print(f"   Next Full Moon: {next_full[0]} at {next_full[1]} UTC  ({next_full[2]} days away)")
+    for label, finder in (("New Moon", ephem.next_new_moon), ("Full Moon", ephem.next_full_moon)):
+        moment, days = next_phase(finder, noon_utc, tz, target)
+        print(
+            f"   Next {label}:  {moment.date()} at"
+            f" {(moment + timedelta(seconds=30)).strftime('%H:%M')} local"
+            f"  ({days} days away)"
+        )
 
-    print("\n✅ All data from USNO + Open-Meteo (free, no API key).")
+    print("\n✅ Computed locally with ephem — no almanac API, no key.")
+    print("   A dash means the event does not occur on this date (normal for the moon).")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
