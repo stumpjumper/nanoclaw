@@ -53,7 +53,7 @@ Not yet opened:
   probably one investigation, not two. Needs a deliberate capture session — opportunistic
   checking has produced no reproduction in six weeks.
 
-  - **`attempt to write a readonly database` in the delivery poll.** **80 occurrences as of
+  - **`attempt to write a readonly database` in the delivery poll.** **82 occurrences as of
     2026-10-04, up from 52 on 2026-08-28** — the earlier read of "essentially dormant, not
     climbing" no longer holds; it added ~28 in about five weeks. From
     `getDueOutboundMessages` (`src/db/session-db.ts`) via `drainSession`. Clusters around
@@ -62,7 +62,7 @@ Not yet opened:
     2026-09-21 as `SQLITE_READONLY_ROLLBACK` on `ncl tasks append-log`, succeeding on retry.
     Could be an upstream bug worth a PR once characterized.
 
-  - **`database disk image is malformed`.** 86 occurrences as of 2026-10-04, newly counted.
+  - **`database disk image is malformed`.** 89 occurrences as of 2026-10-04 (86 at first count that morning).
     Gmail 54, YouTube 13, Exercise 8, Weather 6, Space News 3, Spudtronomy 1, Main 1 — the
     Gmail skew is the most interesting signal. **Not actual corruption:** `pragma
     integrity_check` returns `ok` for `data/v2.db` and for every session DB sampled. It is
