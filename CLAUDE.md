@@ -229,7 +229,7 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
   misses one of them silently persists (that is how Exercise lost Sept 1 2026 after the same
   bug had already cost May–Aug). Full narrative:
   `memory/project_workspace_group_wrong_path.md`.
-- **Private backup hook is `.husky/post-commit`**, not `.git/hooks/post-commit` — husky sets `core.hooksPath`, so hooks in `.git/hooks` are silently ignored (that's how the backup went a month stale). Confirm with `cd ~/.nanoclaw-private && git log -1` after committing.
+- **Private backup hook is `.husky/post-commit`**, not `.git/hooks/post-commit` — husky sets `core.hooksPath`, so hooks in `.git/hooks` are silently ignored (that's how the backup went a month stale). The hook commits locally, then pushes any backlog; a failed push prints a `PRIVATE BACKUP NOT PUSHED` banner after `git commit` — **relay it to Alfred, don't scroll past it** (usually `-25308`, the keychain; see the health check below).
 - Shared skills are at **`/app/skills/`** in the container. A local `/container/skills/` rename existed Jun–Aug 2026 and was reverted; don't reintroduce it.
 - **Two different "global" files — don't confuse them.** `container/CLAUDE.md` is the shared *runtime* prompt every agent imports (that's where the "report failures in the same turn" rule lives). This file is guidance for *coding sessions*. Behavior you want every agent to have goes in the former; things a future Claude should know while editing goes here.
 - **Writing a task-driven group's send step:** say "call `send_message` with `to: <dest>`", never "send a message to the `<dest>` destination". The second phrasing echoes `<message to="…">` block syntax and steers the agent into writing a block, which is inert in a task run — it lands in the run log, earns a corrective nudge, and only then sends. Space News did exactly this. Most groups need no send wording at all; the runtime prompt already covers it.
@@ -249,6 +249,8 @@ grep -c MissingChannelAdapterError logs/nanoclaw.error.log                      
 grep -ci 'disk image is malformed' logs/nanoclaw.error.log                          # bind-mount page cache (see below)
 grep -c 'readonly database' logs/nanoclaw.error.log                                 # see ROADMAP open investigations
 find data/v2-sessions/*/.claude-shared/skills -type l ! -lname '/app/skills/*'      # stale skill symlinks
+git -C ~/.nanoclaw-private log -1 --format=%cr                                     # private backup last sync: days, not weeks (else hook not running)
+git -C ~/.nanoclaw-private rev-list --count origin/main..main                       # unpushed backup commits — must be 0
 
 # cron collisions — any hour:minute claimed by two series (empty output = none)
 ncl tasks list --json | jq -r '.data[]|(.schedule|split(" "))as $f|$f[1]|split(",")[]|"\(.):\($f[0])"' \
