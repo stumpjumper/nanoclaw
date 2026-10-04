@@ -246,6 +246,8 @@ ncl tasks list                                   # RUNS/FAILED per series (read 
                                                  # them. Use --json for scripting.)
 grep -c 'not delivered — task sessions' logs/nanoclaw.log logs/nanoclaw.error.log   # inert-block nudges
 grep -c MissingChannelAdapterError logs/nanoclaw.error.log                          # channel adapter dead
+grep -ci 'disk image is malformed' logs/nanoclaw.error.log                          # bind-mount page cache (see below)
+grep -c 'readonly database' logs/nanoclaw.error.log                                 # see ROADMAP open investigations
 find data/v2-sessions/*/.claude-shared/skills -type l ! -lname '/app/skills/*'      # stale skill symlinks
 
 # cron collisions — any hour:minute claimed by two series (empty output = none)
@@ -276,6 +278,16 @@ single bad build (2026-08-16, surfaced on the 08-27 reboot; details in
 - **A container can't see an env var its config claims it has.** Diff
   `groups/<folder>/container.json` against `ncl groups config get --id <group>` before
   suspecting OneCLI or the proxy — the DB row and the materialized file can disagree.
+
+**`database disk image is malformed` is not corruption.** It is the container's page cache
+seeing a torn view of a session DB across the Docker bind mount. `pragma integrity_check`
+returns `ok` for `data/v2.db` and for the session DBs (verified 2026-10-04 against 86
+logged occurrences). There is already a guard at
+`container/agent-runner/src/poll-loop.ts:473`: ten consecutive hits and the runner exits
+code 75 so the host respawns on a fresh mount — the cost is a container killed mid-work,
+not lost data. Agents surface this themselves and read it as host DB corruption, so the
+triage answer is **"known, self-healing — run `integrity_check` before acting"**. Do not
+restore from backup on the strength of the message alone.
 
 Reading `logs/nanoclaw.error.log`: a steady trickle of `Bad Gateway (status 502)` on
 `[chat-sdk:telegram]` lines is **Telegram's own API flaking on `getUpdates`** — it retries with
